@@ -1,6 +1,8 @@
 import math
 import requests
 import folium
+import pandas as pd
+from datetime import date
 import streamlit as st
 from streamlit_folium import st_folium
 
@@ -53,8 +55,7 @@ def fetch_all_pages(endpoint):
     page = 1
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
-        "Accept": "application/json, text/plain, */*",
-        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+        "Accept": "application/json, text/plain, */*"
     }
     
     while True:
@@ -77,127 +78,214 @@ def fetch_all_pages(endpoint):
             st.error(f"Erro ao conectar com a API ({endpoint}): {e}")
             break
         except requests.exceptions.JSONDecodeError:
-            st.error(f"A API retornou uma resposta inválida (HTTP {r.status_code}). O servidor pode estar bloqueando conexões externas.")
+            st.error(f"A API retornou uma resposta inválida. O servidor pode estar bloqueando conexões.")
             break
             
     return all_entries
 
 # ==========================================
-# Interface Web
+# Configuração da Página
 # ==========================================
-st.set_page_config(page_title="JET Logística Mobile", layout="centered")
+st.set_page_config(page_title="JET Logística Mobile", layout="wide") # Layout wide ajuda a colocar lado a lado
 st.title("🚀 Operador JET DF")
 
-regiao_sel = st.selectbox("Selecione a Região:", list(REGIOES_DF.keys()))
-coords_padrao = REGIOES_CENTRO.get(regiao_sel, (-15.7939, -47.8828))
+# Inicializa memórias da sessão
+if 'rota_gerada' not in st.session_state: st.session_state.rota_gerada = False
+if 'registros' not in st.session_state: st.session_state.registros = []
 
-col1, col2 = st.columns(2)
-with col1:
-    lat = st.number_input("Latitude Inicial", value=coords_padrao[0], format="%.4f")
-    cap = st.number_input("Capacidade da Viagem", value=3, step=1)
-with col2:
-    lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
-    meta = st.number_input("Meta de Patinetes", value=20, step=1)
+# Criando as Abas de navegação
+tab_rotas, tab_scanner, tab_registros = st.tabs(["🗺️ Gerador de Rotas", "📡 Scanner de Regiões", "📅 Registros Diários"])
 
-if 'rota_gerada' not in st.session_state:
-    st.session_state.rota_gerada = False
+# ==========================================
+# ABA 1: GERADOR DE ROTAS
+# ==========================================
+with tab_rotas:
+    regiao_sel = st.selectbox("Selecione a Região:", list(REGIOES_DF.keys()))
+    coords_padrao = REGIOES_CENTRO.get(regiao_sel, (-15.7939, -47.8828))
 
-if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
-    with st.spinner("Buscando dados da JET..."):
-        parkings = fetch_all_pages("parkings")
-        bikes = fetch_all_pages("bikes")
-        reg_info = REGIOES_DF.get(regiao_sel)
-        
-        zones = []
-        for p in parkings:
-            diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
-            if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
-                zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+    col1, col2 = st.columns(2)
+    with col1:
+        lat = st.number_input("Latitude Inicial", value=coords_padrao[0], format="%.4f")
+        cap = st.number_input("Capacidade da Viagem", value=3, step=1)
+    with col2:
+        lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
+        meta = st.number_input("Meta de Patinetes", value=20, step=1)
 
-        pool = [dict(z) for z in zones]
-        route = []
-        carrying = 0
-        current = {"lat": lat, "lng": lng, "name": "INÍCIO"}
-        total_delivered = 0
-
-        while len(route) < 100:
-            if total_delivered >= meta: break
-            has_surplus = any(z["diff"] > 0 for z in pool)
-            if carrying == 0 and not has_surplus: break
-
-            if carrying > 0:
-                targets = [z for z in pool if z["diff"] < 0]
-                if not targets: break
-                targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
-                t = targets[0]
-                qty = min(carrying, -t["diff"], meta - total_delivered)
-                if qty <= 0: break
-                dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-                route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
-                t["diff"] += qty
-                carrying -= qty
-                total_delivered += qty
-                current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
-            else:
-                targets = [z for z in pool if z["diff"] > 0]
-                if not targets: break
-                targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
-                t = targets[0]
-                qty = min(cap, t["diff"], meta - total_delivered)
-                if qty <= 0: break
-                dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-                route.append({"action": "PEGAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
-                t["diff"] -= qty
-                carrying += qty
-                current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
-
-        if route:
-            dist_total = sum(r["dist"] for r in route)
-            tempo_est = math.ceil((dist_total / 12.0) * 60.0 + (total_delivered * 2.0))
+    if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
+        with st.spinner("Buscando dados da JET..."):
+            parkings = fetch_all_pages("parkings")
+            reg_info = REGIOES_DF.get(regiao_sel)
             
-            st.session_state.rota_gerada = True
-            st.session_state.route_data = route
-            st.session_state.total_delivered = total_delivered
-            st.session_state.dist_total = dist_total
-            st.session_state.tempo_est = tempo_est
-            st.session_state.start_lat = lat
-            st.session_state.start_lng = lng
-        else:
-            st.warning("Nenhuma rota encontrada para essa região no momento.")
-            st.session_state.rota_gerada = False
+            zones = []
+            for p in parkings:
+                diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
+                if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
+                    zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
 
-if st.session_state.rota_gerada:
-    total_deliv = st.session_state.total_delivered
-    dist_total = st.session_state.dist_total
-    tempo_est = st.session_state.tempo_est
-    route = st.session_state.route_data
-    s_lat = st.session_state.start_lat
-    s_lng = st.session_state.start_lng
+            pool = [dict(z) for z in zones]
+            route = []
+            carrying = 0
+            current = {"lat": lat, "lng": lng, "name": "INÍCIO"}
+            total_delivered = 0
 
-    st.success(f"✅ Rota Gerada! Total: {total_deliv} patinetes | R$ {total_deliv * 1.50:.2f}")
-    st.info(f"📏 Distância: {dist_total:.2f} km | ⏱️ Tempo Est.: ~{tempo_est} min")
+            while len(route) < 100:
+                if total_delivered >= meta: break
+                has_surplus = any(z["diff"] > 0 for z in pool)
+                if carrying == 0 and not has_surplus: break
 
-    m = folium.Map(location=[s_lat, s_lng], zoom_start=14)
-    folium.CircleMarker([s_lat, s_lng], radius=9, color="green", fill=True, popup="Início").add_to(m)
+                if carrying > 0:
+                    targets = [z for z in pool if z["diff"] < 0]
+                    if not targets: break
+                    targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
+                    t = targets[0]
+                    qty = min(carrying, -t["diff"], meta - total_delivered)
+                    if qty <= 0: break
+                    dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
+                    route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
+                    t["diff"] += qty
+                    carrying -= qty
+                    total_delivered += qty
+                    current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+                else:
+                    targets = [z for z in pool if z["diff"] > 0]
+                    if not targets: break
+                    targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
+                    t = targets[0]
+                    qty = min(cap, t["diff"], meta - total_delivered)
+                    if qty <= 0: break
+                    dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
+                    route.append({"action": "PEGAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
+                    t["diff"] -= qty
+                    carrying += qty
+                    current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+
+            if route:
+                dist_total = sum(r["dist"] for r in route)
+                tempo_est = math.ceil((dist_total / 12.0) * 60.0 + (total_delivered * 2.0))
+                
+                st.session_state.rota_gerada = True
+                st.session_state.route_data = route
+                st.session_state.total_delivered = total_delivered
+                st.session_state.dist_total = dist_total
+                st.session_state.tempo_est = tempo_est
+                st.session_state.start_lat = lat
+                st.session_state.start_lng = lng
+            else:
+                st.warning("Nenhuma rota encontrada para essa região no momento.")
+                st.session_state.rota_gerada = False
+
+    if st.session_state.rota_gerada:
+        st.success(f"✅ Rota Gerada! Total: {st.session_state.total_delivered} patinetes | R$ {st.session_state.total_delivered * 1.50:.2f}")
+        st.info(f"📏 Distância: {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
+
+        # Layout em Colunas: Mapa de um lado, Passos do outro
+        col_mapa, col_passos = st.columns([1.5, 1])
+
+        with col_mapa:
+            m = folium.Map(location=[st.session_state.start_lat, st.session_state.start_lng], zoom_start=14)
+            folium.CircleMarker([st.session_state.start_lat, st.session_state.start_lng], radius=9, color="green", fill=True, popup="Início").add_to(m)
+            
+            path = [[st.session_state.start_lat, st.session_state.start_lng]]
+            for idx, r in enumerate(st.session_state.route_data, 1):
+                path.append(r["coords"])
+                cor = "blue" if r["action"] == "PEGAR" else "red"
+                folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, 
+                                    popup=f"{idx}. {r['action']}").add_to(m)
+
+            folium.PolyLine(path, color="purple", weight=4).add_to(m)
+            st_folium(m, use_container_width=True, height=450, returned_objects=[])
+
+        with col_passos:
+            st.subheader("📍 Passo a Passo")
+            for idx, r in enumerate(st.session_state.route_data, 1):
+                if r["action"] == "PEGAR":
+                    st.markdown(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em {r['name']}")
+                else:
+                    st.markdown(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em {r['name']}")
+
+
+# ==========================================
+# ABA 2: SCANNER DE REGIÕES
+# ==========================================
+with tab_scanner:
+    st.header("📡 Scanner de Oportunidades")
+    st.write("Verifique qual região tem a maior demanda de remanejamento agora.")
     
-    path = [[s_lat, s_lng]]
-    for idx, r in enumerate(route, 1):
-        path.append(r["coords"])
-        cor = "blue" if r["action"] == "PEGAR" else "red"
-        folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, 
-                            popup=f"{idx}. {r['action']} {r['qty']} em {r['name']}").add_to(m)
+    if st.button("🔍 Escanear Todas as Regiões", use_container_width=True):
+        with st.spinner("Analisando todas as zonas do DF..."):
+            parkings = fetch_all_pages("parkings")
+            resultados = []
 
-    folium.PolyLine(path, color="purple", weight=4).add_to(m)
-    
-    # Renderiza o mapa maior, usando a largura da tela e evitando recarregamentos extras com returned_objects
-    st_folium(m, use_container_width=True, height=500, returned_objects=[])
+            for nome_regiao, reg_info in REGIOES_DF.items():
+                if nome_regiao == "Personalizado (Apenas Raio)":
+                    continue
+                
+                sobrando = 0 # Patinetes que precisam ser pegos
+                faltando = 0 # Vagas precisando de patinetes
 
-    st.divider()
-    
-    # Mostra os passos em formato de texto estruturado
-    st.subheader("📍 Passo a Passo da Rota")
-    for idx, r in enumerate(route, 1):
-        if r["action"] == "PEGAR":
-            st.write(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em **{r['name']}**")
-        else:
-            st.write(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em **{r['name']}**")
+                for p in parkings:
+                    if ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
+                        diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
+                        if diff > 0:
+                            sobrando += diff
+                        elif diff < 0:
+                            faltando += abs(diff)
+                
+                # O potencial real de trabalho é o menor número entre o que sobra e o que falta
+                potencial_tarefas = min(sobrando, faltando)
+                resultados.append({
+                    "Região": nome_regiao,
+                    "Patinetes Sobrando (Pegar)": sobrando,
+                    "Vagas Abertas (Deixar)": faltando,
+                    "Potencial Máximo (Tarefas)": potencial_tarefas
+                })
+
+            df_resultados = pd.DataFrame(resultados)
+            # Ordenar pela região com mais potencial de tarefas
+            df_resultados = df_resultados.sort_values(by="Potencial Máximo (Tarefas)", ascending=False).reset_index(drop=True)
+            
+            st.dataframe(df_resultados, use_container_width=True)
+            
+            melhor = df_resultados.iloc[0]
+            if melhor["Potencial Máximo (Tarefas)"] > 0:
+                st.success(f"🏆 A melhor região para faturar agora é **{melhor['Região']}**, com potencial para **{melhor['Potencial Máximo (Tarefas)']}** remanejamentos completos!")
+            else:
+                st.warning("O mapa parece estar equilibrado agora. Nenhuma grande oportunidade detectada.")
+
+
+# ==========================================
+# ABA 3: REGISTROS DIÁRIOS (CALENDÁRIO)
+# ==========================================
+with tab_registros:
+    st.header("📅 Registros de Trabalho")
+    st.write("Anote sua produção. *(Nota: Estes dados são salvos apenas na sessão atual do navegador)*")
+
+    with st.form("form_registro"):
+        col_data, col_qtd, col_add = st.columns([2, 2, 1])
+        with col_data:
+            data_reg = st.date_input("Data", value=date.today(), format="DD/MM/YYYY")
+        with col_qtd:
+            qtd_patinetes = st.number_input("Patinetes Remanejados", min_value=1, step=1)
+        with col_add:
+            st.write("") # Espaçamento
+            st.write("") # Espaçamento
+            submit_reg = st.form_submit_button("Salvar")
+
+        if submit_reg:
+            ganho = qtd_patinetes * 1.50
+            novo_registro = {
+                "Data": data_reg.strftime("%d/%m/%Y"),
+                "Patinetes": qtd_patinetes,
+                "Ganhos (R$)": f"R$ {ganho:.2f}"
+            }
+            st.session_state.registros.append(novo_registro)
+            st.success("Registro adicionado com sucesso!")
+
+    if st.session_state.registros:
+        df_registros = pd.DataFrame(st.session_state.registros)
+        st.dataframe(df_registros, use_container_width=True)
+        
+        # Calcular Total
+        total_p = sum(r["Patinetes"] for r in st.session_state.registros)
+        total_r = total_p * 1.50
+        st.info(f"💰 **Total Acumulado na Sessão:** {total_p} patinetes | **R$ {total_r:.2f}**")
