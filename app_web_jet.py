@@ -51,14 +51,36 @@ def ponto_dentro_da_regiao(lat, lng, reg_info):
 def fetch_all_pages(endpoint):
     all_entries = []
     page = 1
-    headers = {"User-Agent": "Mozilla/5.0", "Accept": "application/json"}
+    # User-Agent de navegador real para evitar bloqueios da API
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
+        "Accept": "application/json, text/plain, */*",
+        "Accept-Language": "pt-BR,pt;q=0.9,en-US;q=0.8,en;q=0.7"
+    }
+    
     while True:
         url = f"{API}/{endpoint}"
-        r = requests.get(url, params={"city_id": CITY_ID, "page": page, "limit": 1000}, headers=headers, timeout=15)
-        data = r.json()
-        all_entries.extend(data.get("entries", []))
-        if page >= data.get("total_pages", 1): break
-        page += 1
+        params = {"city_id": CITY_ID, "page": page, "limit": 1000}
+        
+        try:
+            r = requests.get(url, params=params, headers=headers, timeout=15)
+            r.raise_for_status()  # Levanta erro HTTP se status for 4xx ou 5xx
+            data = r.json()
+            
+            entries = data.get("entries", [])
+            all_entries.extend(entries)
+            
+            if page >= data.get("total_pages", 1):
+                break
+            page += 1
+            
+        except requests.exceptions.RequestException as e:
+            st.error(f"Erro ao conectar com a API ({endpoint}): {e}")
+            break
+        except requests.exceptions.JSONDecodeError:
+            st.error(f"A API da JET retornou uma resposta inválida (HTTP {r.status_code}). O servidor pode estar fora do ar ou bloqueando conexões externas.")
+            break
+            
     return all_entries
 
 # Layout da Aplicação Web (Estilo Mobile First)
