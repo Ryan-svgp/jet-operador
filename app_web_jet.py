@@ -18,7 +18,7 @@ REGIOES_DF = {
 }
 
 REGIOES_CENTRO = {
-    "Asa Sul": (-15.8293, -47.8827),
+    "Asa Sul": (-15.8293, -47.8927),
     "Asa Norte": (-15.7602, -47.8758),
     "Sudoeste": (-15.7871, -47.9318),
     "Plano Piloto": (-15.7939, -47.8828),
@@ -51,7 +51,7 @@ def ponto_dentro_da_regiao(lat, lng, reg_info):
 def fetch_all_pages(endpoint):
     all_entries = []
     page = 1
-    # User-Agent de navegador real para evitar bloqueios da API
+    # User-Agent atualizado para evitar o bloqueio (JSONDecodeError)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -64,7 +64,7 @@ def fetch_all_pages(endpoint):
         
         try:
             r = requests.get(url, params=params, headers=headers, timeout=15)
-            r.raise_for_status()  # Levanta erro HTTP se status for 4xx ou 5xx
+            r.raise_for_status()
             data = r.json()
             
             entries = data.get("entries", [])
@@ -78,12 +78,14 @@ def fetch_all_pages(endpoint):
             st.error(f"Erro ao conectar com a API ({endpoint}): {e}")
             break
         except requests.exceptions.JSONDecodeError:
-            st.error(f"A API da JET retornou uma resposta inválida (HTTP {r.status_code}). O servidor pode estar fora do ar ou bloqueando conexões externas.")
+            st.error(f"A API retornou uma resposta inválida (HTTP {r.status_code}). O servidor pode estar bloqueando conexões externas.")
             break
             
     return all_entries
 
-# Layout da Aplicação Web (Estilo Mobile First)
+# ==========================================
+# Interface Web
+# ==========================================
 st.set_page_config(page_title="JET Logística Mobile", layout="centered")
 st.title("🚀 Operador JET DF")
 
@@ -92,26 +94,28 @@ coords_padrao = REGIOES_CENTRO.get(regiao_sel, (-15.7939, -47.8828))
 
 col1, col2 = st.columns(2)
 with col1:
-    lat = st.number_input("Latitude", value=coords_padrao[0], format="%.4f")
-    cap = st.number_input("Capacidade (Patinetes)", value=3, step=1)
+    lat = st.number_input("Latitude Inicial", value=coords_padrao[0], format="%.4f")
+    cap = st.number_input("Capacidade da Viagem", value=3, step=1)
 with col2:
-    lng = st.number_input("Longitude", value=coords_padrao[1], format="%.4f")
+    lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
     meta = st.number_input("Meta de Patinetes", value=20, step=1)
 
+# Inicializa a memória do Streamlit
+if 'rota_gerada' not in st.session_state:
+    st.session_state.rota_gerada = False
+
 if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
-    with st.spinner("Buscando patinetes na API da JET..."):
+    with st.spinner("Buscando dados da JET..."):
         parkings = fetch_all_pages("parkings")
         bikes = fetch_all_pages("bikes")
         reg_info = REGIOES_DF.get(regiao_sel)
         
-        # Filtra Pontos
         zones = []
         for p in parkings:
             diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
             if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
                 zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
 
-        # Cria Rota Greedy/A-star
         pool = [dict(z) for z in zones]
         route = []
         carrying = 0
@@ -153,21 +157,41 @@ if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
             dist_total = sum(r["dist"] for r in route)
             tempo_est = math.ceil((dist_total / 12.0) * 60.0 + (total_delivered * 2.0))
             
-            st.success(f"✅ Rota Gerada! Total: {total_delivered} patinetes | R$ {total_delivered * 1.50:.2f}")
-            st.info(f"📏 Distância: {dist_total:.2f} km | ⏱️ Tempo Est.: ~{tempo_est} min")
-
-            # Mapa Folium Interativo na Web
-            m = folium.Map(location=[lat, lng], zoom_start=14)
-            folium.CircleMarker([lat, lng], radius=9, color="green", fill=True, popup="Início").add_to(m)
-            
-            path = [[lat, lng]]
-            for idx, r in enumerate(route, 1):
-                path.append(r["coords"])
-                cor = "blue" if r["action"] == "PEGAR" else "red"
-                folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, 
-                                    popup=f"{idx}. {r['action']} {r['qty']} em {r['name']}").add_to(m)
-
-            folium.PolyLine(path, color="purple", weight=4).add_to(m)
-            st_folium(m, width=350, height=400)
+            # 1️⃣ SALVA NA MEMÓRIA AQUI!
+            st.session_state.rota_gerada = True
+            st.session_state.route_data = route
+            st.session_state.total_delivered = total_delivered
+            st.session_state.dist_total = dist_total
+            st.session_state.tempo_est = tempo_est
+            st.session_state.start_lat = lat
+            st.session_state.start_lng = lng
         else:
-            st.warning("Nenhuma rota viável encontrada no momento para essa região.")
+            st.warning("Nenhuma rota encontrada para essa região no momento.")
+            st.session_state.rota_gerada = False
+
+# 2️⃣ LÊ DA MEMÓRIA PARA EXIBIR NA TELA (mesmo se a página recarregar)
+if st.session_state.rota_gerada:
+    total_deliv = st.session_state.total_delivered
+    dist_total = st.session_state.dist_total
+    tempo_est = st.session_state.tempo_est
+    route = st.session_state.route_data
+    s_lat = st.session_state.start_lat
+    s_lng = st.session_state.start_lng
+
+    st.success(f"✅ Rota Gerada! Total: {total_deliv} patinetes | R$ {total_deliv * 1.50:.2f}")
+    st.info(f"📏 Distância: {dist_total:.2f} km | ⏱️ Tempo Est.: ~{tempo_est} min")
+
+    m = folium.Map(location=[s_lat, s_lng], zoom_start=14)
+    folium.CircleMarker([s_lat, s_lng], radius=9, color="green", fill=True, popup="Início").add_to(m)
+    
+    path = [[s_lat, s_lng]]
+    for idx, r in enumerate(route, 1):
+        path.append(r["coords"])
+        cor = "blue" if r["action"] == "PEGAR" else "red"
+        folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, 
+                            popup=f"{idx}. {r['action']} {r['qty']} em {r['name']}").add_to(m)
+
+    folium.PolyLine(path, color="purple", weight=4).add_to(m)
+    
+    # st_folium dispara um recarregamento quando há interação, mas agora nossos dados estão protegidos!
+    st_folium(m, width=350, height=400)
