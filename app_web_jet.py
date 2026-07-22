@@ -51,7 +51,6 @@ def ponto_dentro_da_regiao(lat, lng, reg_info):
 def fetch_all_pages(endpoint):
     all_entries = []
     page = 1
-    # User-Agent atualizado para evitar o bloqueio (JSONDecodeError)
     headers = {
         "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36",
         "Accept": "application/json, text/plain, */*",
@@ -100,7 +99,6 @@ with col2:
     lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
     meta = st.number_input("Meta de Patinetes", value=20, step=1)
 
-# Inicializa a memória do Streamlit
 if 'rota_gerada' not in st.session_state:
     st.session_state.rota_gerada = False
 
@@ -157,7 +155,6 @@ if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
             dist_total = sum(r["dist"] for r in route)
             tempo_est = math.ceil((dist_total / 12.0) * 60.0 + (total_delivered * 2.0))
             
-            # 1️⃣ SALVA NA MEMÓRIA AQUI!
             st.session_state.rota_gerada = True
             st.session_state.route_data = route
             st.session_state.total_delivered = total_delivered
@@ -169,7 +166,6 @@ if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
             st.warning("Nenhuma rota encontrada para essa região no momento.")
             st.session_state.rota_gerada = False
 
-# 2️⃣ LÊ DA MEMÓRIA PARA EXIBIR NA TELA (mesmo se a página recarregar)
 if st.session_state.rota_gerada:
     total_deliv = st.session_state.total_delivered
     dist_total = st.session_state.dist_total
@@ -193,5 +189,15 @@ if st.session_state.rota_gerada:
 
     folium.PolyLine(path, color="purple", weight=4).add_to(m)
     
-    # st_folium dispara um recarregamento quando há interação, mas agora nossos dados estão protegidos!
-    st_folium(m, width=350, height=400)
+    # Renderiza o mapa maior, usando a largura da tela e evitando recarregamentos extras com returned_objects
+    st_folium(m, use_container_width=True, height=500, returned_objects=[])
+
+    st.divider()
+    
+    # Mostra os passos em formato de texto estruturado
+    st.subheader("📍 Passo a Passo da Rota")
+    for idx, r in enumerate(route, 1):
+        if r["action"] == "PEGAR":
+            st.write(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em **{r['name']}**")
+        else:
+            st.write(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em **{r['name']}**")
