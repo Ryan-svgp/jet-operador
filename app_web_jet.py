@@ -286,31 +286,33 @@ with tab_rotas:
 
         with col_passos:
             st.subheader("📍 Passo a Passo")
-            for idx, r in enumerate(st.session_state.route_data, 1):
-                lk = maps_link(*r["coords"])
-                i = idx - 1
-                acao_txt = "🟢 PEGAR" if r["action"] == "PEGAR" else "🔴 DEIXAR"
-                col_chk, col_txt = st.columns([0.15, 0.85])
-                with col_chk:
-                    feito = st.checkbox("", key=f"passo_{idx}", value=st.session_state.passo_feito[i])
-                with col_txt:
-                    st.markdown(
-                        f"**{idx}. {acao_txt}** {r['qty']} patinete(s) em {r['name']}  \n"
-                        f"~{r['duracao_min']:.0f} min / {r['dist']:.2f} km até aqui  \n"
-                        f"[🧭 Abrir rota no Maps]({lk})"
-                    )
-                # conta pro progresso da sessao so na primeira vez que marca
-                if feito and not st.session_state.passo_feito[i]:
-                    st.session_state.passo_feito[i] = True
-                    if r["action"] == "DEIXAR" and idx not in st.session_state.contados_sessao:
-                        st.session_state.entregues_sessao += r["qty"]
-                        st.session_state.contados_sessao.add(idx)
-                elif not feito and st.session_state.passo_feito[i]:
-                    st.session_state.passo_feito[i] = False
-                    if idx in st.session_state.contados_sessao:
-                        st.session_state.entregues_sessao -= r["qty"]
-                        st.session_state.contados_sessao.discard(idx)
-                st.divider()
+            lista_passos = st.container(height=420)
+            with lista_passos:
+                for idx, r in enumerate(st.session_state.route_data, 1):
+                    lk = maps_link(*r["coords"])
+                    i = idx - 1
+                    acao_txt = "🟢 PEGAR" if r["action"] == "PEGAR" else "🔴 DEIXAR"
+                    col_chk, col_txt = st.columns([0.15, 0.85])
+                    with col_chk:
+                        feito = st.checkbox("", key=f"passo_{idx}", value=st.session_state.passo_feito[i])
+                    with col_txt:
+                        st.markdown(
+                            f"**{idx}. {acao_txt}** {r['qty']} patinete(s) em {r['name']}  \n"
+                            f"~{r['duracao_min']:.0f} min / {r['dist']:.2f} km até aqui  \n"
+                            f"[🧭 Abrir rota no Maps]({lk})"
+                        )
+                    # conta pro progresso da sessao so na primeira vez que marca
+                    if feito and not st.session_state.passo_feito[i]:
+                        st.session_state.passo_feito[i] = True
+                        if r["action"] == "DEIXAR" and idx not in st.session_state.contados_sessao:
+                            st.session_state.entregues_sessao += r["qty"]
+                            st.session_state.contados_sessao.add(idx)
+                    elif not feito and st.session_state.passo_feito[i]:
+                        st.session_state.passo_feito[i] = False
+                        if idx in st.session_state.contados_sessao:
+                            st.session_state.entregues_sessao -= r["qty"]
+                            st.session_state.contados_sessao.discard(idx)
+                    st.divider()
 
             concluidos = sum(st.session_state.passo_feito)
             st.caption(f"{concluidos}/{len(st.session_state.route_data)} passos concluídos nesta rota · "
