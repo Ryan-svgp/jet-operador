@@ -134,34 +134,14 @@ def salvar_registro(data_str, qtd, ganho):
         writer.writerow([data_str, qtd, f"{ganho:.2f}"])
 
 
-def osrm_ordenar(current, targets):
-    """Ordena 'targets' pela duracao REAL de rua (nao linha reta), usando o
-    servico publico OSRM. Se a chamada falhar (rede, limite de uso), cai de
-    volta pra estimativa por linha reta, sem quebrar o app."""
-    if not targets:
-        return targets, False
-    coords = f"{current['lng']},{current['lat']};" + ";".join(f"{t['lng']},{t['lat']}" for t in targets)
-    url = f"http://router.project-osrm.org/table/v1/driving/{coords}"
-    try:
-        r = requests.get(url, params={"sources": "0", "annotations": "duration,distance"}, timeout=6)
-        r.raise_for_status()
-        data = r.json()
-        durations = data["durations"][0][1:]
-        distances = data["distances"][0][1:]
-        ok = True
-        for t, dur, dist in zip(targets, durations, distances):
-            if dur is None or dist is None:
-                raise ValueError("OSRM sem rota para algum ponto")
-            t["_dur_min"] = dur / 60.0
-            t["_dist_km"] = dist / 1000.0
-    except Exception:
-        ok = False
-        for t in targets:
-            d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-            t["_dist_km"] = d_km
-            t["_dur_min"] = (d_km / 20.0) * 60.0  # estimativa: 20km/h medio urbano
-    targets.sort(key=lambda z: z["_dur_min"])
-    return targets, ok
+def ordenar_por_distancia(current, targets):
+    """Ordena 'targets' pela distancia em linha reta ate a posicao atual."""
+    for t in targets:
+        d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
+        t["_dist_km"] = d_km
+        t["_dur_min"] = (d_km / 20.0) * 60.0  # estimativa: 20km/h medio urbano, so pra exibir tempo
+    targets.sort(key=lambda z: z["_dist_km"])
+    return targets
 
 
 def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
@@ -187,7 +167,6 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
     carrying = 0
     current = {"lat": lat, "lng": lng, "name": "INÍCIO"}
     total_delivered = 0
-    osrm_falhou = False
 
     while len(route) < 100:
         if total_delivered >= meta:
@@ -200,8 +179,7 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
             targets = [z for z in pool if z["diff"] < 0]
             if not targets:
                 break
-            targets, ok = osrm_ordenar(current, targets)
-            osrm_falhou = osrm_falhou or not ok
+            targets = ordenar_por_distancia(current, targets)
             t = targets[0]
             qty = min(carrying, -t["diff"], meta - total_delivered)
             if qty <= 0:
@@ -216,8 +194,7 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
             targets = [z for z in pool if z["diff"] > 0]
             if not targets:
                 break
-            targets, ok = osrm_ordenar(current, targets)
-            osrm_falhou = osrm_falhou or not ok
+            targets = ordenar_por_distancia(current, targets)
             t = targets[0]
             qty = min(cap, t["diff"], meta - total_delivered)
             if qty <= 0:
@@ -229,8 +206,8 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
             current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
 
     dist_total = sum(r["dist"] for r in route)
-    tempo_est = math.ceil(sum(r["duracao_min"] for r in route) + total_delivered * 1.0)  # +1min por patinete (parar, destravar/travar)
-    return route, total_delivered, dist_total, tempo_est, osrm_falhou
+    tempo_est = math.ceil(sum(r["duracao_min"] for r in route) + total_delivered * 1.0)
+    return route, total_delivered, dist_total, tempo_est
 
 
 # ==========================================
@@ -266,8 +243,8 @@ with tab_rotas:
     incluir_soltos = st.checkbox("Incluir patinetes soltos na rua (fora de estacionamento oficial)", value=True)
 
     if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
-        with st.spinner("Buscando dados da JET e calculando rota real de rua..."):
-            route, total_delivered, dist_total, tempo_est, osrm_falhou = gerar_rota(
+        with st.spinner("Buscando dados da JET..."):
+            route, total_delivered, dist_total, tempo_est = gerar_rota(
                 lat, lng, meta, cap, regiao_sel, incluir_soltos
             )
 
@@ -279,7 +256,6 @@ with tab_rotas:
                 st.session_state.tempo_est = tempo_est
                 st.session_state.start_lat = lat
                 st.session_state.start_lng = lng
-                st.session_state.osrm_falhou = osrm_falhou
                 st.session_state.passo_feito = [False] * len(route)
                 st.session_state.entregues_sessao = 0
                 st.session_state.contados_sessao = set()
@@ -289,9 +265,7 @@ with tab_rotas:
 
     if st.session_state.rota_gerada:
         st.success(f"✅ Rota Gerada! Total: {st.session_state.total_delivered} patinetes | R$ {st.session_state.total_delivered * 1.50:.2f}")
-        st.info(f"📏 Distância real de rua: {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
-        if st.session_state.get("osrm_falhou"):
-            st.caption("⚠️ O serviço de rota real (OSRM) não respondeu em algum trecho — parte da distância/tempo acima usou estimativa em linha reta.")
+        st.info(f"📏 Distância (linha reta): {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
 
         # Layout em Colunas: Mapa de um lado, Passos do outro
         col_mapa, col_passos = st.columns([1.5, 1])
@@ -347,7 +321,7 @@ with tab_rotas:
             if st.button("🔄 Recalcular com dados atualizados (mantém progresso da sessão)", use_container_width=True):
                 with st.spinner("Buscando dados frescos e recalculando..."):
                     meta_restante = max(meta - st.session_state.entregues_sessao, 1)
-                    route, total_delivered, dist_total, tempo_est, osrm_falhou = gerar_rota(
+                    route, total_delivered, dist_total, tempo_est = gerar_rota(
                         lat, lng, meta_restante, cap, regiao_sel, incluir_soltos
                     )
                     if route:
@@ -357,7 +331,6 @@ with tab_rotas:
                         st.session_state.tempo_est = tempo_est
                         st.session_state.start_lat = lat
                         st.session_state.start_lng = lng
-                        st.session_state.osrm_falhou = osrm_falhou
                         st.session_state.passo_feito = [False] * len(route)
                         st.session_state.contados_sessao = set()
                         st.rerun()
@@ -522,10 +495,11 @@ with tab_bateria:
             bikes = fetch_all_pages("bikes")
             candidatos = []
             for b in bikes:
-                bat = b.get("battery_percent")
+                bat_raw = b.get("battery_percent")
                 lat_b, lng_b = b.get("location_lat"), b.get("location_lng")
-                if bat is None or lat_b is None or lng_b is None:
+                if bat_raw is None or lat_b is None or lng_b is None:
                     continue
+                bat = round(bat_raw * 100)  # a API manda 0-1 (ex: 0.46), convertendo pra 0-100
                 if bat < limite_bateria:
                     continue
                 dist = haversine(lat_bat, lng_bat, lat_b, lng_b)
