@@ -134,6 +134,105 @@ def salvar_registro(data_str, qtd, ganho):
         writer.writerow([data_str, qtd, f"{ganho:.2f}"])
 
 
+def osrm_ordenar(current, targets):
+    """Ordena 'targets' pela duracao REAL de rua (nao linha reta), usando o
+    servico publico OSRM. Se a chamada falhar (rede, limite de uso), cai de
+    volta pra estimativa por linha reta, sem quebrar o app."""
+    if not targets:
+        return targets, False
+    coords = f"{current['lng']},{current['lat']};" + ";".join(f"{t['lng']},{t['lat']}" for t in targets)
+    url = f"http://router.project-osrm.org/table/v1/driving/{coords}"
+    try:
+        r = requests.get(url, params={"sources": "0", "annotations": "duration,distance"}, timeout=6)
+        r.raise_for_status()
+        data = r.json()
+        durations = data["durations"][0][1:]
+        distances = data["distances"][0][1:]
+        ok = True
+        for t, dur, dist in zip(targets, durations, distances):
+            if dur is None or dist is None:
+                raise ValueError("OSRM sem rota para algum ponto")
+            t["_dur_min"] = dur / 60.0
+            t["_dist_km"] = dist / 1000.0
+    except Exception:
+        ok = False
+        for t in targets:
+            d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
+            t["_dist_km"] = d_km
+            t["_dur_min"] = (d_km / 20.0) * 60.0  # estimativa: 20km/h medio urbano
+    targets.sort(key=lambda z: z["_dur_min"])
+    return targets, ok
+
+
+def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
+    """Busca dados frescos e monta a rota otimizada. Reaproveitada tanto pelo
+    botao principal quanto pelo botao de recalcular."""
+    parkings = fetch_all_pages("parkings")
+    reg_info = REGIOES_DF.get(regiao_sel)
+
+    zones = []
+    for p in parkings:
+        diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
+        if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
+            zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+
+    if incluir_soltos:
+        bikes = fetch_all_pages("bikes")
+        for z in zonas_soltos(bikes):
+            if ponto_dentro_da_regiao(z["lat"], z["lng"], reg_info):
+                zones.append(z)
+
+    pool = [dict(z) for z in zones]
+    route = []
+    carrying = 0
+    current = {"lat": lat, "lng": lng, "name": "INÍCIO"}
+    total_delivered = 0
+    osrm_falhou = False
+
+    while len(route) < 100:
+        if total_delivered >= meta:
+            break
+        has_surplus = any(z["diff"] > 0 for z in pool)
+        if carrying == 0 and not has_surplus:
+            break
+
+        if carrying > 0:
+            targets = [z for z in pool if z["diff"] < 0]
+            if not targets:
+                break
+            targets, ok = osrm_ordenar(current, targets)
+            osrm_falhou = osrm_falhou or not ok
+            t = targets[0]
+            qty = min(carrying, -t["diff"], meta - total_delivered)
+            if qty <= 0:
+                break
+            route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]),
+                          "dist": t["_dist_km"], "duracao_min": t["_dur_min"]})
+            t["diff"] += qty
+            carrying -= qty
+            total_delivered += qty
+            current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+        else:
+            targets = [z for z in pool if z["diff"] > 0]
+            if not targets:
+                break
+            targets, ok = osrm_ordenar(current, targets)
+            osrm_falhou = osrm_falhou or not ok
+            t = targets[0]
+            qty = min(cap, t["diff"], meta - total_delivered)
+            if qty <= 0:
+                break
+            route.append({"action": "PEGAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]),
+                          "dist": t["_dist_km"], "duracao_min": t["_dur_min"]})
+            t["diff"] -= qty
+            carrying += qty
+            current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+
+    dist_total = sum(r["dist"] for r in route)
+    tempo_est = math.ceil(sum(r["duracao_min"] for r in route) + total_delivered * 1.0)  # +1min por patinete (parar, destravar/travar)
+    return route, total_delivered, dist_total, tempo_est, osrm_falhou
+
+
 # ==========================================
 # Configuração da Página
 # ==========================================
@@ -145,7 +244,9 @@ if 'rota_gerada' not in st.session_state: st.session_state.rota_gerada = False
 if 'registros' not in st.session_state: st.session_state.registros = carregar_registros()
 
 # Criando as Abas de navegação
-tab_rotas, tab_scanner, tab_registros = st.tabs(["🗺️ Gerador de Rotas", "📡 Scanner de Regiões", "📅 Registros Diários"])
+tab_rotas, tab_scanner, tab_registros, tab_bateria = st.tabs(
+    ["🗺️ Gerador de Rotas", "📡 Scanner de Regiões", "📅 Registros Diários", "🔋 Trocar Bateria"]
+)
 
 # ==========================================
 # ABA 1: GERADOR DE ROTAS
@@ -165,63 +266,12 @@ with tab_rotas:
     incluir_soltos = st.checkbox("Incluir patinetes soltos na rua (fora de estacionamento oficial)", value=True)
 
     if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
-        with st.spinner("Buscando dados da JET..."):
-            parkings = fetch_all_pages("parkings")
-            reg_info = REGIOES_DF.get(regiao_sel)
-
-            zones = []
-            for p in parkings:
-                diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
-                if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
-                    zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
-
-            if incluir_soltos:
-                bikes = fetch_all_pages("bikes")
-                for z in zonas_soltos(bikes):
-                    if ponto_dentro_da_regiao(z["lat"], z["lng"], reg_info):
-                        zones.append(z)
-
-            pool = [dict(z) for z in zones]
-            route = []
-            carrying = 0
-            current = {"lat": lat, "lng": lng, "name": "INÍCIO"}
-            total_delivered = 0
-
-            while len(route) < 100:
-                if total_delivered >= meta: break
-                has_surplus = any(z["diff"] > 0 for z in pool)
-                if carrying == 0 and not has_surplus: break
-
-                if carrying > 0:
-                    targets = [z for z in pool if z["diff"] < 0]
-                    if not targets: break
-                    targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
-                    t = targets[0]
-                    qty = min(carrying, -t["diff"], meta - total_delivered)
-                    if qty <= 0: break
-                    dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-                    route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
-                    t["diff"] += qty
-                    carrying -= qty
-                    total_delivered += qty
-                    current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
-                else:
-                    targets = [z for z in pool if z["diff"] > 0]
-                    if not targets: break
-                    targets.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
-                    t = targets[0]
-                    qty = min(cap, t["diff"], meta - total_delivered)
-                    if qty <= 0: break
-                    dist = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-                    route.append({"action": "PEGAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]), "dist": dist})
-                    t["diff"] -= qty
-                    carrying += qty
-                    current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+        with st.spinner("Buscando dados da JET e calculando rota real de rua..."):
+            route, total_delivered, dist_total, tempo_est, osrm_falhou = gerar_rota(
+                lat, lng, meta, cap, regiao_sel, incluir_soltos
+            )
 
             if route:
-                dist_total = sum(r["dist"] for r in route)
-                tempo_est = math.ceil((dist_total / 12.0) * 60.0 + (total_delivered * 2.0))
-                
                 st.session_state.rota_gerada = True
                 st.session_state.route_data = route
                 st.session_state.total_delivered = total_delivered
@@ -229,13 +279,19 @@ with tab_rotas:
                 st.session_state.tempo_est = tempo_est
                 st.session_state.start_lat = lat
                 st.session_state.start_lng = lng
+                st.session_state.osrm_falhou = osrm_falhou
+                st.session_state.passo_feito = [False] * len(route)
+                st.session_state.entregues_sessao = 0
+                st.session_state.contados_sessao = set()
             else:
                 st.warning("Nenhuma rota encontrada para essa região no momento.")
                 st.session_state.rota_gerada = False
 
     if st.session_state.rota_gerada:
         st.success(f"✅ Rota Gerada! Total: {st.session_state.total_delivered} patinetes | R$ {st.session_state.total_delivered * 1.50:.2f}")
-        st.info(f"📏 Distância: {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
+        st.info(f"📏 Distância real de rua: {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
+        if st.session_state.get("osrm_falhou"):
+            st.caption("⚠️ O serviço de rota real (OSRM) não respondeu em algum trecho — parte da distância/tempo acima usou estimativa em linha reta.")
 
         # Layout em Colunas: Mapa de um lado, Passos do outro
         col_mapa, col_passos = st.columns([1.5, 1])
@@ -258,11 +314,55 @@ with tab_rotas:
             st.subheader("📍 Passo a Passo")
             for idx, r in enumerate(st.session_state.route_data, 1):
                 lk = maps_link(*r["coords"])
-                if r["action"] == "PEGAR":
-                    st.markdown(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em {r['name']}  \n[🧭 Abrir rota no Maps]({lk})")
-                else:
-                    st.markdown(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em {r['name']}  \n[🧭 Abrir rota no Maps]({lk})")
+                i = idx - 1
+                acao_txt = "🟢 PEGAR" if r["action"] == "PEGAR" else "🔴 DEIXAR"
+                col_chk, col_txt = st.columns([0.15, 0.85])
+                with col_chk:
+                    feito = st.checkbox("", key=f"passo_{idx}", value=st.session_state.passo_feito[i])
+                with col_txt:
+                    st.markdown(
+                        f"**{idx}. {acao_txt}** {r['qty']} patinete(s) em {r['name']}  \n"
+                        f"~{r['duracao_min']:.0f} min / {r['dist']:.2f} km até aqui  \n"
+                        f"[🧭 Abrir rota no Maps]({lk})"
+                    )
+                # conta pro progresso da sessao so na primeira vez que marca
+                if feito and not st.session_state.passo_feito[i]:
+                    st.session_state.passo_feito[i] = True
+                    if r["action"] == "DEIXAR" and idx not in st.session_state.contados_sessao:
+                        st.session_state.entregues_sessao += r["qty"]
+                        st.session_state.contados_sessao.add(idx)
+                elif not feito and st.session_state.passo_feito[i]:
+                    st.session_state.passo_feito[i] = False
+                    if idx in st.session_state.contados_sessao:
+                        st.session_state.entregues_sessao -= r["qty"]
+                        st.session_state.contados_sessao.discard(idx)
                 st.divider()
+
+            concluidos = sum(st.session_state.passo_feito)
+            st.caption(f"{concluidos}/{len(st.session_state.route_data)} passos concluídos nesta rota · "
+                       f"{st.session_state.entregues_sessao} patinetes já entregues na sessão")
+
+            st.markdown("**Patinete sumiu do lugar ou já foi pego por outro operador?** "
+                        "Atualize sua latitude/longitude lá em cima pra sua posição atual e recalcule:")
+            if st.button("🔄 Recalcular com dados atualizados (mantém progresso da sessão)", use_container_width=True):
+                with st.spinner("Buscando dados frescos e recalculando..."):
+                    meta_restante = max(meta - st.session_state.entregues_sessao, 1)
+                    route, total_delivered, dist_total, tempo_est, osrm_falhou = gerar_rota(
+                        lat, lng, meta_restante, cap, regiao_sel, incluir_soltos
+                    )
+                    if route:
+                        st.session_state.route_data = route
+                        st.session_state.total_delivered = total_delivered
+                        st.session_state.dist_total = dist_total
+                        st.session_state.tempo_est = tempo_est
+                        st.session_state.start_lat = lat
+                        st.session_state.start_lng = lng
+                        st.session_state.osrm_falhou = osrm_falhou
+                        st.session_state.passo_feito = [False] * len(route)
+                        st.session_state.contados_sessao = set()
+                        st.rerun()
+                    else:
+                        st.warning("Nada de novo pra rebalancear por aqui agora — pode ser que a região tenha zerado.")
 
 
 # ==========================================
@@ -398,3 +498,55 @@ with tab_registros:
         )
     else:
         st.write("Nenhum registro ainda. Adicione o primeiro acima.")
+
+
+# ==========================================
+# ABA 4: TROCAR BATERIA
+# ==========================================
+with tab_bateria:
+    st.header("🔋 Achar Patinete com Bateria Alta Pra Trocar")
+    st.write("Regra do treinamento: se um patinete que você está mexendo está com bateria baixa "
+             "(~40% ou menos), troca a bateria dele por uma de um patinete próximo com bateria alta "
+             "(90%+). Essa aba só acha o patinete carregado mais perto de você — a troca em si é manual.")
+
+    col_a, col_b = st.columns(2)
+    with col_a:
+        lat_bat = st.number_input("Sua latitude atual", value=-15.8000, format="%.4f", key="lat_bat")
+        limite_bateria = st.slider("Bateria mínima desejada (%)", min_value=50, max_value=100, value=90, step=5)
+    with col_b:
+        lng_bat = st.number_input("Sua longitude atual", value=-47.8950, format="%.4f", key="lng_bat")
+        qtd_resultados = st.number_input("Quantos mostrar", min_value=1, max_value=15, value=5, step=1)
+
+    if st.button("🔍 Achar patinete com bateria alta mais próximo", use_container_width=True):
+        with st.spinner("Buscando patinetes..."):
+            bikes = fetch_all_pages("bikes")
+            candidatos = []
+            for b in bikes:
+                bat = b.get("battery_percent")
+                lat_b, lng_b = b.get("location_lat"), b.get("location_lng")
+                if bat is None or lat_b is None or lng_b is None:
+                    continue
+                if bat < limite_bateria:
+                    continue
+                dist = haversine(lat_bat, lng_bat, lat_b, lng_b)
+                candidatos.append({
+                    "identificador": b.get("identifier", "sem id"),
+                    "bateria": bat,
+                    "lat": lat_b,
+                    "lng": lng_b,
+                    "dist_km": dist
+                })
+
+            candidatos.sort(key=lambda c: c["dist_km"])
+            candidatos = candidatos[:qtd_resultados]
+
+            if not candidatos:
+                st.warning(f"Nenhum patinete com {limite_bateria}%+ de bateria encontrado. Tente diminuir o mínimo.")
+            else:
+                for i, c in enumerate(candidatos, 1):
+                    lk = maps_link(c["lat"], c["lng"])
+                    st.markdown(
+                        f"**{i}. {c['identificador']}** — 🔋 {c['bateria']}% — "
+                        f"📍 {c['dist_km']:.2f} km em linha reta  \n[🧭 Abrir no Maps]({lk})"
+                    )
+                    st.divider()
