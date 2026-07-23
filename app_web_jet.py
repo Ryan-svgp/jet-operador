@@ -210,6 +210,52 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
     return route, total_delivered, dist_total, tempo_est
 
 
+def melhor_ponto_inicio(zonas_surplus, meta_qtd):
+    """Testa cada zona com sobra como possivel ponto de partida e simula
+    quanto de deslocamento seria necessario pra juntar 'meta_qtd' patinetes
+    a partir dali, pegando sempre o mais proximo em seguida. Devolve a que
+    exige menos deslocamento total, junto com a cadeia de paradas."""
+    melhor_candidato = None
+    melhor_custo = float("inf")
+    melhor_cadeia = []
+
+    for candidato in zonas_surplus:
+        pool = [dict(z) for z in zonas_surplus]
+        # acha o mesmo candidato dentro da copia do pool (por nome+coords) pra usar como partida
+        current = {"lat": candidato["lat"], "lng": candidato["lng"]}
+        acumulado = 0
+        custo = 0.0
+        cadeia = []
+        primeira_parada = True
+
+        while acumulado < meta_qtd:
+            disponiveis = [z for z in pool if z["diff"] > 0]
+            if not disponiveis:
+                break
+            disponiveis.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
+            t = disponiveis[0]
+            d = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
+            # na primeira parada (o proprio candidato) o custo de chegada e zero
+            if primeira_parada and t["name"] == candidato["name"] and t["lat"] == candidato["lat"]:
+                d = 0.0
+            pega = min(t["diff"], meta_qtd - acumulado)
+            custo += d
+            acumulado += pega
+            cadeia.append({"name": t["name"], "lat": t["lat"], "lng": t["lng"], "qty": pega, "dist": d})
+            t["diff"] -= pega
+            current = {"lat": t["lat"], "lng": t["lng"]}
+            primeira_parada = False
+            if t["diff"] <= 0:
+                pool.remove(t)
+
+        if acumulado >= meta_qtd and custo < melhor_custo:
+            melhor_custo = custo
+            melhor_candidato = candidato
+            melhor_cadeia = cadeia
+
+    return melhor_candidato, melhor_custo, melhor_cadeia
+
+
 # ==========================================
 # Configuração da Página
 # ==========================================
@@ -221,8 +267,8 @@ if 'rota_gerada' not in st.session_state: st.session_state.rota_gerada = False
 if 'registros' not in st.session_state: st.session_state.registros = carregar_registros()
 
 # Criando as Abas de navegação
-tab_rotas, tab_scanner, tab_registros, tab_bateria = st.tabs(
-    ["🗺️ Gerador de Rotas", "📡 Scanner de Regiões", "📅 Registros Diários", "🔋 Trocar Bateria"]
+tab_rotas, tab_inicio, tab_scanner, tab_registros, tab_bateria = st.tabs(
+    ["🗺️ Gerador de Rotas", "🎯 Onde Começar", "📡 Scanner de Regiões", "📅 Registros Diários", "🔋 Trocar Bateria"]
 )
 
 # ==========================================
@@ -338,6 +384,64 @@ with tab_rotas:
                         st.rerun()
                     else:
                         st.warning("Nada de novo pra rebalancear por aqui agora — pode ser que a região tenha zerado.")
+
+
+with tab_inicio:
+    st.header("🎯 Onde Começar")
+    st.write("Escolha a região e quantos patinetes você quer fazer nessa sessão. "
+             "Ele testa todos os pontos com sobra da região e acha o que exige menos "
+             "deslocamento pra juntar essa quantidade.")
+
+    col_x, col_y = st.columns(2)
+    with col_x:
+        regiao_inicio = st.selectbox("Região:", list(REGIOES_DF.keys()), key="regiao_inicio")
+    with col_y:
+        meta_inicio = st.number_input("Quantos patinetes você quer fazer agora?", min_value=1, value=10, step=1, key="meta_inicio")
+
+    incluir_soltos_inicio = st.checkbox("Incluir patinetes soltos na rua", value=True, key="soltos_inicio")
+
+    if st.button("🔍 Achar melhor ponto de partida", use_container_width=True):
+        with st.spinner("Testando os pontos da região..."):
+            parkings = fetch_all_pages("parkings")
+            reg_info = REGIOES_DF.get(regiao_inicio)
+
+            zonas_surplus = []
+            for p in parkings:
+                diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
+                if diff > 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
+                    zonas_surplus.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+
+            if incluir_soltos_inicio:
+                bikes = fetch_all_pages("bikes")
+                for z in zonas_soltos(bikes):
+                    if ponto_dentro_da_regiao(z["lat"], z["lng"], reg_info):
+                        zonas_surplus.append(z)
+
+            if not zonas_surplus:
+                st.warning("Nenhum ponto com sobra encontrado nessa região agora.")
+            else:
+                candidato, custo, cadeia = melhor_ponto_inicio(zonas_surplus, meta_inicio)
+
+                if not candidato:
+                    total_disponivel = sum(z["diff"] for z in zonas_surplus)
+                    st.warning(f"Não tem patinete suficiente na região pra juntar {meta_inicio} — "
+                               f"só tem {total_disponivel} no total. Tente uma meta menor ou outra região.")
+                else:
+                    lk = maps_link(candidato["lat"], candidato["lng"])
+                    st.success(f"🏆 Melhor ponto de partida: **{candidato['name']}**")
+                    st.info(f"📏 {custo:.2f} km de deslocamento total pra juntar {meta_inicio} patinetes")
+                    st.markdown(f"[🧭 Abrir esse ponto no Maps]({lk})")
+
+                    st.subheader("Cadeia de paradas a partir daí")
+                    for i, c in enumerate(cadeia, 1):
+                        lk_c = maps_link(c["lat"], c["lng"])
+                        st.markdown(f"**{i}.** {c['name']} — pegar {c['qty']} — {c['dist']:.2f} km desde a parada anterior  \n[🧭 Maps]({lk_c})")
+
+                    m2 = folium.Map(location=[candidato["lat"], candidato["lng"]], zoom_start=14)
+                    folium.CircleMarker([candidato["lat"], candidato["lng"]], radius=10, color="green", fill=True, popup="Começar aqui").add_to(m2)
+                    for c in cadeia:
+                        folium.CircleMarker([c["lat"], c["lng"]], radius=7, color="blue", fill=True, popup=c["name"]).add_to(m2)
+                    st_folium(m2, use_container_width=True, height=400, returned_objects=[])
 
 
 # ==========================================
