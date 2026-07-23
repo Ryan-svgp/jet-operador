@@ -1,6 +1,7 @@
 import math
 import os
 import csv
+import json
 import requests
 import folium
 import pandas as pd
@@ -12,6 +13,7 @@ from streamlit_folium import st_folium
 API = "https://logistic.gojet.app/api/v0/urent"
 CITY_ID = "6787b812c168def1b2c6d143"
 REGISTROS_CSV = os.path.join(os.path.dirname(__file__), "registros.csv")
+ESTADO_JSON = os.path.join(os.path.dirname(__file__), "estado_rota.json")
 
 REGIOES_DF = {
     "Personalizado (Apenas Raio)": None,
@@ -109,13 +111,59 @@ def zonas_soltos(bikes, grid=0.0015):
             "name": f"🟢 {len(pts)} patinete(s) solto(s) na rua",
             "lat": avg_lat,
             "lng": avg_lng,
-            "diff": len(pts)
+            "diff": len(pts),
+            "kind": "solto"
         })
     return zonas
 
 
 def maps_link(lat, lng):
     return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}&travelmode=driving"
+
+
+def carregar_estado():
+    if not os.path.exists(ESTADO_JSON):
+        return {}
+    try:
+        with open(ESTADO_JSON, encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def salvar_estado(d):
+    try:
+        with open(ESTADO_JSON, "w", encoding="utf-8") as f:
+            json.dump(d, f)
+    except Exception:
+        pass  # nao trava o app se der erro de escrita
+
+
+def limpar_estado():
+    if os.path.exists(ESTADO_JSON):
+        try:
+            os.remove(ESTADO_JSON)
+        except Exception:
+            pass
+
+
+def snapshot_estado():
+    """Junta o estado atual da sessao pra salvar em disco."""
+    return {
+        "rota_gerada": st.session_state.get("rota_gerada", False),
+        "route_data": st.session_state.get("route_data", []),
+        "total_delivered": st.session_state.get("total_delivered", 0),
+        "dist_total": st.session_state.get("dist_total", 0),
+        "tempo_est": st.session_state.get("tempo_est", 0),
+        "start_lat": st.session_state.get("start_lat", -15.8000),
+        "start_lng": st.session_state.get("start_lng", -47.8950),
+        "passo_feito": st.session_state.get("passo_feito", []),
+        "entregues_sessao": st.session_state.get("entregues_sessao", 0),
+        "contados_sessao": list(st.session_state.get("contados_sessao", set())),
+        "meta": st.session_state.get("ultima_meta", 20),
+        "cap": st.session_state.get("ultima_cap", 2),
+        "regiao": st.session_state.get("ultima_regiao", "Asa Sul"),
+    }
 
 
 def carregar_registros():
@@ -154,7 +202,7 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
     for p in parkings:
         diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
         if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
-            zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+            zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff, "kind": "estacionamento"})
 
     if incluir_soltos:
         bikes = fetch_all_pages("bikes")
@@ -191,7 +239,9 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos):
             total_delivered += qty
             current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
         else:
-            targets = [z for z in pool if z["diff"] > 0]
+            # supervisores pedem pra priorizar patinete solto antes dos pontos oficiais
+            soltos_disp = [z for z in pool if z["diff"] > 0 and z.get("kind") == "solto"]
+            targets = soltos_disp if soltos_disp else [z for z in pool if z["diff"] > 0]
             if not targets:
                 break
             targets = ordenar_por_distancia(current, targets)
@@ -229,7 +279,8 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd):
         primeira_parada = True
 
         while acumulado < meta_qtd:
-            disponiveis = [z for z in pool if z["diff"] > 0]
+            soltos_disp = [z for z in pool if z["diff"] > 0 and z.get("kind") == "solto"]
+            disponiveis = soltos_disp if soltos_disp else [z for z in pool if z["diff"] > 0]
             if not disponiveis:
                 break
             disponiveis.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
@@ -281,7 +332,7 @@ with tab_rotas:
     col1, col2 = st.columns(2)
     with col1:
         lat = st.number_input("Latitude Inicial", value=coords_padrao[0], format="%.4f")
-        cap = st.number_input("Capacidade da Viagem", value=3, step=1)
+        cap = st.number_input("Capacidade da Viagem", value=2, step=1, help="Com trânsito/carro, 2 costuma ser mais realista que 3.")
     with col2:
         lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
         meta = st.number_input("Meta de Patinetes", value=20, step=1)
@@ -409,7 +460,7 @@ with tab_inicio:
             for p in parkings:
                 diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
                 if diff > 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
-                    zonas_surplus.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+                    zonas_surplus.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff, "kind": "estacionamento"})
 
             if incluir_soltos_inicio:
                 bikes = fetch_all_pages("bikes")
@@ -630,3 +681,4 @@ with tab_bateria:
                         f"📍 {c['dist_km']:.2f} km em linha reta  \n[🧭 Abrir no Maps]({lk})"
                     )
                     st.divider()
+    
