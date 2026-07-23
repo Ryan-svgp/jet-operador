@@ -1,13 +1,17 @@
 import math
+import os
+import csv
 import requests
 import folium
 import pandas as pd
-from datetime import date
+from datetime import date, datetime
+from urllib.parse import quote
 import streamlit as st
 from streamlit_folium import st_folium
 
 API = "https://logistic.gojet.app/api/v0/urent"
 CITY_ID = "6787b812c168def1b2c6d143"
+REGISTROS_CSV = os.path.join(os.path.dirname(__file__), "registros.csv")
 
 REGIOES_DF = {
     "Personalizado (Apenas Raio)": None,
@@ -50,6 +54,7 @@ def ponto_dentro_da_regiao(lat, lng, reg_info):
         return (min_lat <= lat <= max_lat) and (min_lng <= lng <= max_lng)
     return True
 
+@st.cache_data(ttl=60, show_spinner=False)
 def fetch_all_pages(endpoint):
     all_entries = []
     page = 1
@@ -83,6 +88,52 @@ def fetch_all_pages(endpoint):
             
     return all_entries
 
+def zonas_soltos(bikes, grid=0.0015):
+    """Agrupa patinetes sem parking_id (soltos na rua) em zonas por proximidade,
+    pra nao virar uma zona por patinete individual. grid=0.0015 graus ~ 150m."""
+    grupos = {}
+    for b in bikes:
+        if b.get("parking_id"):
+            continue
+        lat, lng = b.get("location_lat"), b.get("location_lng")
+        if lat is None or lng is None:
+            continue
+        chave = (round(lat / grid) * grid, round(lng / grid) * grid)
+        grupos.setdefault(chave, []).append((lat, lng))
+
+    zonas = []
+    for (klat, klng), pts in grupos.items():
+        avg_lat = sum(p[0] for p in pts) / len(pts)
+        avg_lng = sum(p[1] for p in pts) / len(pts)
+        zonas.append({
+            "name": f"🟢 {len(pts)} patinete(s) solto(s) na rua",
+            "lat": avg_lat,
+            "lng": avg_lng,
+            "diff": len(pts)
+        })
+    return zonas
+
+
+def maps_link(lat, lng):
+    return f"https://www.google.com/maps/dir/?api=1&destination={lat},{lng}&travelmode=driving"
+
+
+def carregar_registros():
+    if not os.path.exists(REGISTROS_CSV):
+        return []
+    with open(REGISTROS_CSV, newline="", encoding="utf-8") as f:
+        return list(csv.DictReader(f))
+
+
+def salvar_registro(data_str, qtd, ganho):
+    novo = not os.path.exists(REGISTROS_CSV)
+    with open(REGISTROS_CSV, "a", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f)
+        if novo:
+            writer.writerow(["Data", "Patinetes", "Ganhos (R$)"])
+        writer.writerow([data_str, qtd, f"{ganho:.2f}"])
+
+
 # ==========================================
 # Configuração da Página
 # ==========================================
@@ -91,7 +142,7 @@ st.title("🚀 Operador JET DF")
 
 # Inicializa memórias da sessão
 if 'rota_gerada' not in st.session_state: st.session_state.rota_gerada = False
-if 'registros' not in st.session_state: st.session_state.registros = []
+if 'registros' not in st.session_state: st.session_state.registros = carregar_registros()
 
 # Criando as Abas de navegação
 tab_rotas, tab_scanner, tab_registros = st.tabs(["🗺️ Gerador de Rotas", "📡 Scanner de Regiões", "📅 Registros Diários"])
@@ -111,16 +162,24 @@ with tab_rotas:
         lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
         meta = st.number_input("Meta de Patinetes", value=20, step=1)
 
+    incluir_soltos = st.checkbox("Incluir patinetes soltos na rua (fora de estacionamento oficial)", value=True)
+
     if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
         with st.spinner("Buscando dados da JET..."):
             parkings = fetch_all_pages("parkings")
             reg_info = REGIOES_DF.get(regiao_sel)
-            
+
             zones = []
             for p in parkings:
                 diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
                 if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
                     zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff})
+
+            if incluir_soltos:
+                bikes = fetch_all_pages("bikes")
+                for z in zonas_soltos(bikes):
+                    if ponto_dentro_da_regiao(z["lat"], z["lng"], reg_info):
+                        zones.append(z)
 
             pool = [dict(z) for z in zones]
             route = []
@@ -198,10 +257,12 @@ with tab_rotas:
         with col_passos:
             st.subheader("📍 Passo a Passo")
             for idx, r in enumerate(st.session_state.route_data, 1):
+                lk = maps_link(*r["coords"])
                 if r["action"] == "PEGAR":
-                    st.markdown(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em {r['name']}")
+                    st.markdown(f"**{idx}. 🟢 PEGAR** {r['qty']} patinete(s) em {r['name']}  \n[🧭 Abrir rota no Maps]({lk})")
                 else:
-                    st.markdown(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em {r['name']}")
+                    st.markdown(f"**{idx}. 🔴 DEIXAR** {r['qty']} patinete(s) em {r['name']}  \n[🧭 Abrir rota no Maps]({lk})")
+                st.divider()
 
 
 # ==========================================
@@ -258,7 +319,11 @@ with tab_scanner:
 # ==========================================
 with tab_registros:
     st.header("📅 Registros de Trabalho")
-    st.write("Anote sua produção. *(Nota: Estes dados são salvos apenas na sessão atual do navegador)*")
+    st.caption("Os registros ficam salvos num arquivo no servidor (sobrevivem a fechar o navegador). "
+               "Se o app for redeployado do zero no Streamlit Cloud, esse arquivo pode ser resetado — "
+               "por isso o botão de exportar CSV abaixo é seu backup pessoal.")
+
+    meta_mensal = st.number_input("🎯 Meta mensal (R$)", value=4000.0, step=100.0)
 
     with st.form("form_registro"):
         col_data, col_qtd, col_add = st.columns([2, 2, 1])
@@ -273,19 +338,63 @@ with tab_registros:
 
         if submit_reg:
             ganho = qtd_patinetes * 1.50
-            novo_registro = {
-                "Data": data_reg.strftime("%d/%m/%Y"),
-                "Patinetes": qtd_patinetes,
-                "Ganhos (R$)": f"R$ {ganho:.2f}"
-            }
-            st.session_state.registros.append(novo_registro)
-            st.success("Registro adicionado com sucesso!")
+            data_str = data_reg.strftime("%d/%m/%Y")
+            salvar_registro(data_str, qtd_patinetes, ganho)
+            st.session_state.registros.append({
+                "Data": data_str,
+                "Patinetes": str(qtd_patinetes),
+                "Ganhos (R$)": f"{ganho:.2f}"
+            })
+            st.success("Registro salvo!")
 
     if st.session_state.registros:
         df_registros = pd.DataFrame(st.session_state.registros)
-        st.dataframe(df_registros, use_container_width=True)
-        
-        # Calcular Total
-        total_p = sum(r["Patinetes"] for r in st.session_state.registros)
-        total_r = total_p * 1.50
-        st.info(f"💰 **Total Acumulado na Sessão:** {total_p} patinetes | **R$ {total_r:.2f}**")
+        df_registros["Patinetes"] = pd.to_numeric(df_registros["Patinetes"], errors="coerce").fillna(0)
+        df_registros["Ganhos (R$)"] = pd.to_numeric(df_registros["Ganhos (R$)"], errors="coerce").fillna(0)
+        df_registros["_data_dt"] = pd.to_datetime(df_registros["Data"], format="%d/%m/%Y", errors="coerce")
+
+        st.dataframe(
+            df_registros[["Data", "Patinetes", "Ganhos (R$)"]],
+            use_container_width=True
+        )
+
+        st.download_button(
+            "⬇️ Exportar CSV",
+            data=df_registros[["Data", "Patinetes", "Ganhos (R$)"]].to_csv(index=False).encode("utf-8"),
+            file_name="registros_jet.csv",
+            mime="text/csv"
+        )
+
+        # Total geral
+        total_p = int(df_registros["Patinetes"].sum())
+        total_r = df_registros["Ganhos (R$)"].sum()
+        st.info(f"💰 **Total Acumulado (histórico):** {total_p} patinetes | **R$ {total_r:.2f}**")
+
+        # Progresso do mês atual
+        hoje = datetime.today()
+        do_mes = df_registros[
+            (df_registros["_data_dt"].dt.month == hoje.month) &
+            (df_registros["_data_dt"].dt.year == hoje.year)
+        ]
+        ganho_mes = do_mes["Ganhos (R$)"].sum()
+        patinetes_mes = int(do_mes["Patinetes"].sum())
+        pct = min(ganho_mes / meta_mensal, 1.0) if meta_mensal > 0 else 0
+
+        st.subheader(f"🎯 Progresso de {hoje.strftime('%B/%Y')}")
+        st.progress(pct)
+        faltam = max(meta_mensal - ganho_mes, 0)
+        dias_no_mes = hoje.day
+        dias_restantes = max(
+            (date(hoje.year, hoje.month % 12 + 1, 1) - date.today()).days
+            if hoje.month < 12 else (date(hoje.year + 1, 1, 1) - date.today()).days,
+            1
+        )
+        st.write(
+            f"**R$ {ganho_mes:.2f}** de **R$ {meta_mensal:.2f}** ({pct*100:.0f}%) — "
+            f"{patinetes_mes} patinetes até agora. "
+            f"Faltam **R$ {faltam:.2f}** (~{math.ceil(faltam/1.5) if faltam > 0 else 0} patinetes) "
+            f"em {dias_restantes} dias restantes no mês "
+            f"(~R$ {faltam/dias_restantes:.2f}/dia se dividir igual)."
+        )
+    else:
+        st.write("Nenhum registro ainda. Adicione o primeiro acima.")
