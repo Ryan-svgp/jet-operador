@@ -313,8 +313,24 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd):
 st.set_page_config(page_title="JET Logística Mobile", layout="wide") # Layout wide ajuda a colocar lado a lado
 st.title("🚀 Operador JET DF")
 
-# Inicializa memórias da sessão
-if 'rota_gerada' not in st.session_state: st.session_state.rota_gerada = False
+# Inicializa memórias da sessão, recuperando do arquivo salvo em disco se existir
+_estado_salvo = carregar_estado()
+
+if 'rota_gerada' not in st.session_state:
+    st.session_state.rota_gerada = _estado_salvo.get("rota_gerada", False)
+    st.session_state.route_data = _estado_salvo.get("route_data", [])
+    st.session_state.total_delivered = _estado_salvo.get("total_delivered", 0)
+    st.session_state.dist_total = _estado_salvo.get("dist_total", 0)
+    st.session_state.tempo_est = _estado_salvo.get("tempo_est", 0)
+    st.session_state.start_lat = _estado_salvo.get("start_lat", -15.8000)
+    st.session_state.start_lng = _estado_salvo.get("start_lng", -47.8950)
+    st.session_state.passo_feito = _estado_salvo.get("passo_feito", [])
+    st.session_state.entregues_sessao = _estado_salvo.get("entregues_sessao", 0)
+    st.session_state.contados_sessao = set(_estado_salvo.get("contados_sessao", []))
+    st.session_state.ultima_meta = _estado_salvo.get("meta", 20)
+    st.session_state.ultima_cap = _estado_salvo.get("cap", 2)
+    st.session_state.ultima_regiao = _estado_salvo.get("regiao", "Asa Sul")
+
 if 'registros' not in st.session_state: st.session_state.registros = carregar_registros()
 
 # Criando as Abas de navegação
@@ -326,20 +342,40 @@ tab_rotas, tab_inicio, tab_scanner, tab_registros, tab_bateria = st.tabs(
 # ABA 1: GERADOR DE ROTAS
 # ==========================================
 with tab_rotas:
-    regiao_sel = st.selectbox("Selecione a Região:", list(REGIOES_DF.keys()))
+    if st.session_state.rota_gerada:
+        st.caption("🔁 Rota e progresso recuperados de onde você parou.")
+
+    regioes_lista = list(REGIOES_DF.keys())
+    idx_regiao_padrao = regioes_lista.index(st.session_state.ultima_regiao) if st.session_state.ultima_regiao in regioes_lista else 0
+    regiao_sel = st.selectbox("Selecione a Região:", regioes_lista, index=idx_regiao_padrao)
     coords_padrao = REGIOES_CENTRO.get(regiao_sel, (-15.7939, -47.8828))
 
     col1, col2 = st.columns(2)
     with col1:
-        lat = st.number_input("Latitude Inicial", value=coords_padrao[0], format="%.4f")
-        cap = st.number_input("Capacidade da Viagem", value=2, step=1, help="Com trânsito/carro, 2 costuma ser mais realista que 3.")
+        lat_padrao = st.session_state.start_lat if st.session_state.rota_gerada else coords_padrao[0]
+        lat = st.number_input("Latitude Inicial", value=lat_padrao, format="%.4f")
+        cap = st.number_input("Capacidade da Viagem", value=st.session_state.ultima_cap, step=1, help="Com trânsito/carro, 2 costuma ser mais realista que 3.")
     with col2:
-        lng = st.number_input("Longitude Inicial", value=coords_padrao[1], format="%.4f")
-        meta = st.number_input("Meta de Patinetes", value=20, step=1)
+        lng_padrao = st.session_state.start_lng if st.session_state.rota_gerada else coords_padrao[1]
+        lng = st.number_input("Longitude Inicial", value=lng_padrao, format="%.4f")
+        meta = st.number_input("Meta de Patinetes", value=st.session_state.ultima_meta, step=1)
 
     incluir_soltos = st.checkbox("Incluir patinetes soltos na rua (fora de estacionamento oficial)", value=True)
 
-    if st.button("🔥 Gerar Rota Otimizada", use_container_width=True):
+    col_gerar, col_limpar = st.columns([3, 1])
+    with col_limpar:
+        if st.button("🗑️ Limpar sessão", use_container_width=True):
+            limpar_estado()
+            for k in ["rota_gerada", "route_data", "total_delivered", "dist_total", "tempo_est",
+                      "start_lat", "start_lng", "passo_feito", "entregues_sessao", "contados_sessao"]:
+                if k in st.session_state:
+                    del st.session_state[k]
+            st.rerun()
+
+    with col_gerar:
+        gerar_clicado = st.button("🔥 Gerar Rota Otimizada", use_container_width=True)
+
+    if gerar_clicado:
         with st.spinner("Buscando dados da JET..."):
             route, total_delivered, dist_total, tempo_est = gerar_rota(
                 lat, lng, meta, cap, regiao_sel, incluir_soltos
@@ -356,6 +392,10 @@ with tab_rotas:
                 st.session_state.passo_feito = [False] * len(route)
                 st.session_state.entregues_sessao = 0
                 st.session_state.contados_sessao = set()
+                st.session_state.ultima_meta = meta
+                st.session_state.ultima_cap = cap
+                st.session_state.ultima_regiao = regiao_sel
+                salvar_estado(snapshot_estado())
             else:
                 st.warning("Nenhuma rota encontrada para essa região no momento.")
                 st.session_state.rota_gerada = False
@@ -399,16 +439,21 @@ with tab_rotas:
                             f"[🧭 Abrir rota no Maps]({lk})"
                         )
                     # conta pro progresso da sessao so na primeira vez que marca
+                    mudou = False
                     if feito and not st.session_state.passo_feito[i]:
                         st.session_state.passo_feito[i] = True
+                        mudou = True
                         if r["action"] == "DEIXAR" and idx not in st.session_state.contados_sessao:
                             st.session_state.entregues_sessao += r["qty"]
                             st.session_state.contados_sessao.add(idx)
                     elif not feito and st.session_state.passo_feito[i]:
                         st.session_state.passo_feito[i] = False
+                        mudou = True
                         if idx in st.session_state.contados_sessao:
                             st.session_state.entregues_sessao -= r["qty"]
                             st.session_state.contados_sessao.discard(idx)
+                    if mudou:
+                        salvar_estado(snapshot_estado())
                     st.divider()
 
             concluidos = sum(st.session_state.passo_feito)
@@ -681,4 +726,3 @@ with tab_bateria:
                         f"📍 {c['dist_km']:.2f} km em linha reta  \n[🧭 Abrir no Maps]({lk})"
                     )
                     st.divider()
-    
