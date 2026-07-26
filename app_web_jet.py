@@ -137,7 +137,7 @@ def maps_link(lat, lng):
 
 def get_osrm_route(path_coords):
     if len(path_coords) < 2:
-        return path_coords, True
+        return path_coords, 0, 0, True
 
     coords_str = ";".join([f"{lng},{lat}" for lat, lng in path_coords])
     url = f"http://router.project-osrm.org/route/v1/foot/{coords_str}?geometries=geojson&overview=full"
@@ -147,10 +147,14 @@ def get_osrm_route(path_coords):
         if r.status_code == 200:
             data = r.json()
             if data.get("code") == "Ok":
-                return [[lat, lng] for lng, lat in data["routes"][0]["geometry"]["coordinates"]], True
+                route_info = data["routes"][0]
+                coords = [[lat, lng] for lng, lat in route_info["geometry"]["coordinates"]]
+                dist_m = route_info.get("distance", 0)
+                dur_s = route_info.get("duration", 0)
+                return coords, dist_m, dur_s, True
     except Exception:
         pass
-    return path_coords, False
+    return path_coords, 0, 0, False
 
 
 # ==========================================
@@ -295,35 +299,24 @@ def nivel_criticidade(zone):
 
 
 def ordenar_alvos(current, targets, acao):
-    """
-    A inteligência real da otimização de rota.
-    Calcula a distância e aplica pequenos bônus no 'score' para priorizar de forma 
-    inteligente, SEM quebrar a proximidade.
-    """
     for t in targets:
         d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
         t["_dist_km"] = d_km
         t["_dur_min"] = (d_km / 15.0) * 60.0
         
         score = d_km
-        
-        # O Bônus funciona como um desconto ilusório na distância
         if acao == "PEGAR":
-            # Se for solto na rua, o sistema enxerga ele 150m mais perto do que ele realmente está
             if t.get("kind") == "solto":
                 score -= 0.15 
         elif acao == "DEIXAR":
             crit = nivel_criticidade(t)
             if crit == 0:
-                # Ponto crítico (zero) ganha bônus de 250m. 
                 score -= 0.25 
             elif crit == 1:
-                # Ponto quase vazio (1 patinete) ganha bônus de 100m.
                 score -= 0.10
                 
         t["_score"] = score
         
-    # Ordena pelo score (distância com desconto), não só por criticidade
     targets.sort(key=lambda z: z["_score"])
     return targets
 
@@ -366,7 +359,6 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
             targets = [z for z in pool if z["diff"] < 0]
             if not targets: break
             
-            # Chama a função de ordenação inteligente para DEIXAR
             targets = ordenar_alvos(current, targets, "DEIXAR")
             t = targets[0]
             
@@ -380,11 +372,9 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
             current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
             
         else:
-            # Lista única e misturada de TUDO que tem sobra. A separação foi desfeita.
             targets = [z for z in pool if z["diff"] > 0]
             if not targets: break
             
-            # Chama a função de ordenação inteligente para PEGAR
             targets = ordenar_alvos(current, targets, "PEGAR")
             t = targets[0]
             
@@ -423,7 +413,6 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd, lat_ini=None, lng_ini=None):
         primeira_parada = True
 
         while acumulado < meta_qtd:
-            # Aplica a mesma lógica combinada aqui
             disponiveis = [z for z in pool if z["diff"] > 0]
             if not disponiveis: break
             disponiveis = ordenar_alvos(current, disponiveis, "PEGAR")
@@ -528,7 +517,7 @@ with tab_rotas:
 
     incluir_soltos = st.checkbox("Incluir patinetes soltos na rua", value=True)
     usar_rota_real = st.checkbox(
-        "🧭 Tentar calcular rota real pelas ruas (OSRM)",
+        "🧭 Calcular distância real pelas ruas (OSRM)",
         value=False,
         help="Em áreas de quadra fechada o OSRM pode dar uma volta enorme onde a pé daria pra cortar caminho. Deixe desmarcado pra usar linha reta (mais realista)."
     )
@@ -573,7 +562,35 @@ with tab_rotas:
 
     if st.session_state.rota_gerada:
         st.success(f"✅ Rota Gerada! Total: {st.session_state.total_delivered} patinetes | R$ {st.session_state.total_delivered * 1.50:.2f}")
-        st.info(f"📏 Distância: {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
+        
+        # PREPARAR COORDENADAS PARA O MAPA E OSRM
+        path = [[st.session_state.start_lat, st.session_state.start_lng]]
+        for idx, r in enumerate(st.session_state.route_data, 1):
+            path.append(r["coords"])
+            
+        if usar_rota_real:
+            with st.spinner("Calculando trajeto real pelas ruas (OSRM)..."):
+                path_real, osrm_dist_m, osrm_dur_s, rota_ok = get_osrm_route(path)
+            
+            if rota_ok:
+                distancia_real_km = osrm_dist_m / 1000.0
+                tempo_deslocamento_min = (distancia_real_km / 15.0) * 60.0
+                
+                # Recalcula tempo de manuseio
+                tempo_manuseio = 0.0
+                for r in st.session_state.route_data:
+                    if r["qty"] == 1: tempo_manuseio += 1.0
+                    elif r["qty"] >= 2: tempo_manuseio += 1.75 + (r["qty"] - 2) * 0.75
+                
+                tempo_est_real = math.ceil(tempo_deslocamento_min + tempo_manuseio)
+                st.info(f"📍 **Distância (Ruas):** {distancia_real_km:.2f} km | ⏱️ **Tempo Est. (Ruas):** ~{tempo_est_real} min")
+            else:
+                st.info(f"📏 Distância (Linha Reta): {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
+                st.caption("⚠️ Falha na API de ruas. Exibindo linha reta.")
+                path_real = path
+        else:
+            path_real = path
+            st.info(f"📏 Distância (Linha Reta): {st.session_state.dist_total:.2f} km | ⏱️ Tempo Est.: ~{st.session_state.tempo_est} min")
 
         col_mapa, col_passos = st.columns([1.5, 1])
         with col_mapa:
@@ -587,22 +604,13 @@ with tab_rotas:
                                radius=st.session_state["draw_radius_km"] * 1000,
                                color="orange", fill=False, opacity=0.3).add_to(m)
 
-            path = [[st.session_state.start_lat, st.session_state.start_lng]]
             for idx, r in enumerate(st.session_state.route_data, 1):
-                path.append(r["coords"])
                 if r["action"] == "PEGAR":
                     cor = "blue"
                 else:
                     crit = r.get("criticidade", 2)
                     cor = "red" if crit == 0 else ("orange" if crit == 1 else "darkred")
                 folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, popup=f"{idx}. {r['action']}").add_to(m)
-
-            if usar_rota_real:
-                path_real, rota_ok = get_osrm_route(path)
-                if not rota_ok:
-                    st.caption("⚠️ Não foi possível calcular a rota real pelas ruas agora (serviço OSRM instável) — exibindo linha reta.")
-            else:
-                path_real, rota_ok = path, True
 
             folium.PolyLine(path_real, color="purple", weight=4).add_to(m)
             st_folium(m, use_container_width=True, height=450, returned_objects=[])
