@@ -297,6 +297,22 @@ def render_area_selector(widget_key, default_center):
         return None
 
 
+def nivel_criticidade(zone):
+    """Prioridade de reabastecimento de um ponto de estacionamento:
+    0 = crítico (ponto está com 0 patinetes agora)
+    1 = quase vazio (ponto está com apenas 1 patinete agora)
+    2 = normal (tem mais patinetes, mas ainda está abaixo da meta)
+    Pontos soltos na rua (kind='solto') não entram nessa lógica (não são destino de DEIXAR)."""
+    if zone.get("kind") != "estacionamento":
+        return 2
+    bikes_count = zone.get("bikes_count")
+    if bikes_count == 0:
+        return 0
+    if bikes_count == 1:
+        return 1
+    return 2
+
+
 def ordenar_por_distancia(current, targets):
     for t in targets:
         d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
@@ -322,7 +338,8 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
     for p in parkings:
         diff = p.get("bikes_count", 0) - p.get("target_bikes_count", 0)
         if diff != 0 and ponto_dentro_da_regiao(p["latitude"], p["longitude"], reg_info):
-            zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff, "kind": "estacionamento"})
+            zones.append({"name": p.get("name", "Ponto"), "lat": p["latitude"], "lng": p["longitude"], "diff": diff,
+                          "kind": "estacionamento", "bikes_count": p.get("bikes_count", 0)})
 
     if incluir_soltos:
         bikes = fetch_all_pages("bikes")
@@ -345,11 +362,13 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
             targets = [z for z in pool if z["diff"] < 0]
             if not targets: break
             targets = ordenar_por_distancia(current, targets)
+            # Prioridade: pontos críticos (vazios) e quase vazios primeiro; distância só desempata dentro do mesmo nível
+            targets.sort(key=lambda z: (nivel_criticidade(z), z["_dist_km"]))
             t = targets[0]
             qty = min(carrying, -t["diff"], meta - total_delivered)
             if qty <= 0: break
             route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]),
-                          "dist": t["_dist_km"], "duracao_min": t["_dur_min"]})
+                          "dist": t["_dist_km"], "duracao_min": t["_dur_min"], "criticidade": nivel_criticidade(t)})
             t["diff"] += qty
             carrying -= qty
             total_delivered += qty
@@ -500,6 +519,13 @@ with tab_rotas:
         meta = st.number_input("Meta de Patinetes", value=st.session_state.ultima_meta, step=1)
 
     incluir_soltos = st.checkbox("Incluir patinetes soltos na rua", value=True)
+    usar_rota_real = st.checkbox(
+        "🧭 Tentar calcular rota real pelas ruas (OSRM)",
+        value=False,
+        help="Em áreas de quadra fechada (Asa Sul/Norte etc.) o OSRM só enxerga ruas de carro e pode "
+             "dar uma volta enorme onde a pé daria pra cortar caminho. Deixe desmarcado pra usar linha "
+             "reta (mais realista pra pé nessas áreas). Ative se estiver numa área com ruas mais abertas."
+    )
 
     col_gerar, col_limpar = st.columns([3, 1])
     with col_limpar:
@@ -558,14 +584,23 @@ with tab_rotas:
             path = [[st.session_state.start_lat, st.session_state.start_lng]]
             for idx, r in enumerate(st.session_state.route_data, 1):
                 path.append(r["coords"])
-                cor = "blue" if r["action"] == "PEGAR" else "red"
+                if r["action"] == "PEGAR":
+                    cor = "blue"
+                else:
+                    crit = r.get("criticidade", 2)
+                    cor = "red" if crit == 0 else ("orange" if crit == 1 else "darkred")
                 folium.CircleMarker(r["coords"], radius=8, color=cor, fill=True, popup=f"{idx}. {r['action']}").add_to(m)
 
-            path_real, rota_ok = get_osrm_route(path)
+            if usar_rota_real:
+                path_real, rota_ok = get_osrm_route(path)
+                if not rota_ok:
+                    st.caption("⚠️ Não foi possível calcular a rota real pelas ruas agora (serviço OSRM instável/indisponível) — exibindo linha reta aproximada entre os pontos.")
+            else:
+                path_real, rota_ok = path, True
+
             folium.PolyLine(path_real, color="purple", weight=4).add_to(m)
             st_folium(m, use_container_width=True, height=450, returned_objects=[])
-            if not rota_ok:
-                st.caption("⚠️ Não foi possível calcular a rota real pelas ruas agora (serviço OSRM instável/indisponível) — exibindo linha reta aproximada entre os pontos.")
+            st.caption("🔵 Pegar  ·  🔴 Deixar — crítico (0 patinetes)  ·  🟠 Deixar — quase vazio (1 patinete)  ·  🔺 vermelho escuro = Deixar normal (ainda abaixo da meta, mas não vazio)")
 
         with col_passos:
             st.subheader("📍 Passo a Passo")
@@ -574,7 +609,16 @@ with tab_rotas:
                 for idx, r in enumerate(st.session_state.route_data, 1):
                     lk = maps_link(*r["coords"])
                     i = idx - 1
-                    acao_txt = "🟢 PEGAR" if r["action"] == "PEGAR" else "🔴 DEIXAR"
+                    if r["action"] == "PEGAR":
+                        acao_txt = "🟢 PEGAR"
+                    else:
+                        crit = r.get("criticidade", 2)
+                        if crit == 0:
+                            acao_txt = "🔴 DEIXAR (crítico — 0 patinetes)"
+                        elif crit == 1:
+                            acao_txt = "🟠 DEIXAR (quase vazio — 1 patinete)"
+                        else:
+                            acao_txt = "🔴 DEIXAR"
                     col_chk, col_txt = st.columns([0.15, 0.85])
                     with col_chk:
                         feito = st.checkbox("", key=f"passo_{st.session_state.route_version}_{idx}", value=st.session_state.passo_feito[i])
