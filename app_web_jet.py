@@ -20,7 +20,7 @@ try:
         supabase: Client = create_client(st.secrets["SUPABASE_URL"], st.secrets["SUPABASE_KEY"])
         USE_SUPABASE = True
 except (ImportError, FileNotFoundError, KeyError):
-    pass  # Falha silenciosa: usará fallback para arquivos locais se não achar chaves
+    pass
 
 API = "https://logistic.gojet.app/api/v0/urent"
 CITY_ID = "6787b812c168def1b2c6d143"
@@ -150,7 +150,6 @@ def get_osrm_route(path_coords):
                 return [[lat, lng] for lng, lat in data["routes"][0]["geometry"]["coordinates"]], True
     except Exception:
         pass
-
     return path_coords, False
 
 
@@ -288,27 +287,43 @@ def render_area_selector(widget_key, default_center):
 
 
 def nivel_criticidade(zone):
-    if zone.get("kind") != "estacionamento":
-        return 2
+    if zone.get("kind") != "estacionamento": return 2
     bikes_count = zone.get("bikes_count")
     if bikes_count == 0: return 0
     if bikes_count == 1: return 1
     return 2
 
 
-def ordenar_por_distancia(current, targets):
-    """Calcula a distância e aplica o bônus de 500m apenas para priorizar a escolha de patinetes soltos."""
+def ordenar_alvos(current, targets, acao):
+    """
+    A inteligência real da otimização de rota.
+    Calcula a distância e aplica pequenos bônus no 'score' para priorizar de forma 
+    inteligente, SEM quebrar a proximidade.
+    """
     for t in targets:
         d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
-        
-        # Bônus matemático: enxerga patinetes soltos como se estivessem 500m mais perto
-        bonus = 0.5 if t.get("kind") == "solto" else 0.0
-        
         t["_dist_km"] = d_km
-        t["_score"] = d_km - bonus 
         t["_dur_min"] = (d_km / 15.0) * 60.0
         
-    # Ordena pelo score em vez da distância seca
+        score = d_km
+        
+        # O Bônus funciona como um desconto ilusório na distância
+        if acao == "PEGAR":
+            # Se for solto na rua, o sistema enxerga ele 150m mais perto do que ele realmente está
+            if t.get("kind") == "solto":
+                score -= 0.15 
+        elif acao == "DEIXAR":
+            crit = nivel_criticidade(t)
+            if crit == 0:
+                # Ponto crítico (zero) ganha bônus de 250m. 
+                score -= 0.25 
+            elif crit == 1:
+                # Ponto quase vazio (1 patinete) ganha bônus de 100m.
+                score -= 0.10
+                
+        t["_score"] = score
+        
+    # Ordena pelo score (distância com desconto), não só por criticidade
     targets.sort(key=lambda z: z["_score"])
     return targets
 
@@ -350,10 +365,11 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
         if carrying > 0:
             targets = [z for z in pool if z["diff"] < 0]
             if not targets: break
-            targets = ordenar_por_distancia(current, targets)
-            # A lambda de criticidade funciona perfeitamente com a distância bruta calculada acima
-            targets.sort(key=lambda z: (nivel_criticidade(z), z["_dist_km"]))
+            
+            # Chama a função de ordenação inteligente para DEIXAR
+            targets = ordenar_alvos(current, targets, "DEIXAR")
             t = targets[0]
+            
             qty = min(carrying, -t["diff"], meta - total_delivered)
             if qty <= 0: break
             route.append({"action": "DEIXAR", "qty": qty, "name": t["name"], "coords": (t["lat"], t["lng"]),
@@ -362,13 +378,14 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
             carrying -= qty
             total_delivered += qty
             current = {"lat": t["lat"], "lng": t["lng"], "name": t["name"]}
+            
         else:
-            soltos_disp = [z for z in pool if z["diff"] > 0 and z.get("kind") == "solto"]
-            targets = soltos_disp if soltos_disp else [z for z in pool if z["diff"] > 0]
+            # Lista única e misturada de TUDO que tem sobra. A separação foi desfeita.
+            targets = [z for z in pool if z["diff"] > 0]
             if not targets: break
             
-            # Aqui a nova função de distância vai usar o Score e priorizar sem exagerar
-            targets = ordenar_por_distancia(current, targets)
+            # Chama a função de ordenação inteligente para PEGAR
+            targets = ordenar_alvos(current, targets, "PEGAR")
             t = targets[0]
             
             qty = min(cap, t["diff"], meta - total_delivered)
@@ -406,11 +423,12 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd, lat_ini=None, lng_ini=None):
         primeira_parada = True
 
         while acumulado < meta_qtd:
-            soltos_disp = [z for z in pool if z["diff"] > 0 and z.get("kind") == "solto"]
-            disponiveis = soltos_disp if soltos_disp else [z for z in pool if z["diff"] > 0]
+            # Aplica a mesma lógica combinada aqui
+            disponiveis = [z for z in pool if z["diff"] > 0]
             if not disponiveis: break
-            disponiveis.sort(key=lambda z: haversine(current["lat"], current["lng"], z["lat"], z["lng"]))
+            disponiveis = ordenar_alvos(current, disponiveis, "PEGAR")
             t = disponiveis[0]
+            
             d = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
             if primeira_parada and t["name"] == candidato["name"] and t["lat"] == candidato["lat"]:
                 d = 0.0
@@ -512,7 +530,7 @@ with tab_rotas:
     usar_rota_real = st.checkbox(
         "🧭 Tentar calcular rota real pelas ruas (OSRM)",
         value=False,
-        help="Em áreas de quadra fechada (Asa Sul/Norte etc.) o OSRM só enxerga ruas de carro e pode dar uma volta enorme onde a pé daria pra cortar caminho. Deixe desmarcado pra usar linha reta (mais realista). Ative se estiver numa área com ruas abertas."
+        help="Em áreas de quadra fechada o OSRM pode dar uma volta enorme onde a pé daria pra cortar caminho. Deixe desmarcado pra usar linha reta (mais realista)."
     )
 
     col_gerar, col_limpar = st.columns([3, 1])
@@ -784,4 +802,29 @@ with tab_bateria:
 
     if st.button("Achar", use_container_width=True):
         bikes = fetch_all_pages("bikes")
-        st.write("Função de bateria iniciada...")
+        candidatos = []
+        for b in bikes:
+            bat_raw = b.get("battery_percent")
+            lat_b, lng_b = b.get("location_lat"), b.get("location_lng")
+            if bat_raw is None or lat_b is None or lng_b is None: continue
+            bat = round(bat_raw * 100)
+            if bat < limite_bateria: continue
+            dist = haversine(lat_bat, lng_bat, lat_b, lng_b)
+            candidatos.append({
+                "identificador": b.get("identifier", "sem id"),
+                "bateria": bat, "lat": lat_b, "lng": lng_b, "dist_km": dist
+            })
+
+        candidatos.sort(key=lambda c: c["dist_km"])
+        candidatos = candidatos[:qtd_resultados]
+
+        if not candidatos:
+            st.warning(f"Nenhum patinete com {limite_bateria}%+ de bateria encontrado.")
+        else:
+            for i, c in enumerate(candidatos, 1):
+                lk = maps_link(c["lat"], c["lng"])
+                st.markdown(
+                    f"**{i}. {c['identificador']}** — 🔋 {c['bateria']}% — "
+                    f"📍 {c['dist_km']:.2f} km em linha reta  \n[🧭 Abrir no Maps]({lk})"
+                )
+                st.divider()
