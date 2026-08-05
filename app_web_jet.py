@@ -29,7 +29,7 @@ ESTADO_JSON = os.path.join(os.path.dirname(__file__), "estado_rota.json")
 
 REGIOES_DF = {
     "Personalizado (Apenas Raio)": None,           
-    "🖊️ Desenhar Área no Mapa": None,               
+    "🖊️ Desenhar Área no Mapa": None,                
     "Asa Sul": ("circle", -15.8293, -47.8927, 4.13),
     "Asa Norte": ("circle", -15.7602, -47.8758, 3.87),
     "Sudoeste": ("circle", -15.7871, -47.9318, 2.57),
@@ -298,7 +298,7 @@ def nivel_criticidade(zone):
     return 2
 
 
-def ordenar_alvos(current, targets, acao):
+def ordenar_alvos(current, targets, acao, pool_completo=None):
     for t in targets:
         d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
         t["_dist_km"] = d_km
@@ -308,6 +308,18 @@ def ordenar_alvos(current, targets, acao):
         if acao == "PEGAR":
             if t.get("kind") == "solto":
                 score -= 0.15 
+            
+            # Lógica Lookahead: Prever o esforço de carregar o patinete
+            if pool_completo:
+                pontos_entrega = [z for z in pool_completo if z["diff"] < 0]
+                
+                if pontos_entrega:
+                    dist_ate_entrega = min(
+                        haversine(t["lat"], t["lng"], entrega["lat"], entrega["lng"]) 
+                        for entrega in pontos_entrega
+                    )
+                    score += (dist_ate_entrega * 4.0)
+
         elif acao == "DEIXAR":
             crit = nivel_criticidade(t)
             if crit == 0:
@@ -375,7 +387,7 @@ def gerar_rota(lat, lng, meta, cap, regiao_sel, incluir_soltos, raio_personaliza
             targets = [z for z in pool if z["diff"] > 0]
             if not targets: break
             
-            targets = ordenar_alvos(current, targets, "PEGAR")
+            targets = ordenar_alvos(current, targets, "PEGAR", pool)
             t = targets[0]
             
             qty = min(cap, t["diff"], meta - total_delivered)
@@ -415,7 +427,7 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd, lat_ini=None, lng_ini=None):
         while acumulado < meta_qtd:
             disponiveis = [z for z in pool if z["diff"] > 0]
             if not disponiveis: break
-            disponiveis = ordenar_alvos(current, disponiveis, "PEGAR")
+            disponiveis = ordenar_alvos(current, disponiveis, "PEGAR", pool)
             t = disponiveis[0]
             
             d = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
