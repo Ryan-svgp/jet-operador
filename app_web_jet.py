@@ -303,22 +303,13 @@ def ordenar_alvos(current, targets, acao, pool_completo=None):
         d_km = haversine(current["lat"], current["lng"], t["lat"], t["lng"])
         t["_dist_km"] = d_km
         t["_dur_min"] = (d_km / 15.0) * 60.0
-        
+
         score = d_km
         if acao == "PEGAR":
             if t.get("kind") == "solto":
-                score -= 0.15 
-            
-            # Lógica Lookahead: Prever o esforço de carregar o patinete
-            if pool_completo:
-                pontos_entrega = [z for z in pool_completo if z["diff"] < 0]
-                
-                if pontos_entrega:
-                    dist_ate_entrega = min(
-                        haversine(t["lat"], t["lng"], entrega["lat"], entrega["lng"]) 
-                        for entrega in pontos_entrega
-                    )
-                    score += (dist_ate_entrega * 4.0)
+                score -= 0.15
+            # Otimização: prioriza sempre o patinete/ponto mais próximo do local atual,
+            # sem lookahead de entrega futura (mais ágil na operação real).
 
         elif acao == "DEIXAR":
             crit = nivel_criticidade(t)
