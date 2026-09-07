@@ -3,12 +3,15 @@ from datetime import date, datetime, time, timedelta
 import json
 import math
 import os
+from zoneinfo import ZoneInfo
 import folium
 from folium.plugins import Draw
 import pandas as pd
 import requests
 import streamlit as st
 from streamlit_folium import st_folium
+
+FUSO_BSB = ZoneInfo("America/Sao_Paulo")
 
 # ==========================================
 # Configuração do Supabase (Solução 1 - Banco de Dados)
@@ -576,21 +579,17 @@ def melhor_ponto_inicio(zonas_surplus, meta_qtd, lat_ini=None, lng_ini=None):
 
 
 # ==========================================
-# Projeção de Descarga da Bateria
+# Projeção de Descarga da Bateria com Horário Base
 # ==========================================
-def projetar_bateria(bateria_atual_pct, horario_alvo):
-    agora = datetime.now()
-    alvo = datetime.combine(agora.date(), horario_alvo)
+def projetar_bateria_datas(bateria_atual_pct, dt_inicio, dt_alvo):
+    delta_horas = (dt_alvo - dt_inicio).total_seconds() / 3600.0
+    if delta_horas < 0:
+        delta_horas = 0.0
 
-    if alvo <= agora:
-        alvo += timedelta(days=1)
-
-    delta_horas = (alvo - agora).total_seconds() / 3600.0
-    # Consumo fixo observado de ~1% a cada 35.5 minutos parado (~1.69% por hora)
+    # Consumo fixo observado de 1% a cada 35.5 minutos (~1.69% por hora parado)
     gasto = delta_horas * (60.0 / 35.5)
-
     bateria_futura = max(0.0, bateria_atual_pct - gasto)
-    return round(bateria_futura, 1), round(delta_horas, 1)
+    return round(bateria_futura, 1), round(delta_horas, 2)
 
 
 # ==========================================
@@ -1189,23 +1188,60 @@ with tab_registros:
         st.dataframe(df_registros, use_container_width=True)
 
 # ==========================================
-# ABA 5: BATERIA (Previsão por Horário & Mapa Real)
+# ABA 5: BATERIA (Horário de Brasília & Filtro Total de Data/Hora)
 # ==========================================
 with tab_bateria:
     st.header("🔋 Previsão de Bateria da Frota")
 
-    col_h1, col_h2, col_h3 = st.columns([1.5, 1.5, 1.2])
-    with col_h1:
-        horario_alvo = st.time_input(
-            "Horário Alvo (ex: 05:00):",
-            value=time(5, 0),
-            key="bat_horario_alvo",
+    # Horário atual de Brasília
+    agora_bsb = datetime.now(FUSO_BSB)
+
+    st.subheader("1. Ponto de Partida (Horário Atual de Referência)")
+    c_ref1, c_ref2 = st.columns(2)
+    with c_ref1:
+        data_base = st.date_input("Data Atual (DF):", value=agora_bsb.date())
+    with c_ref2:
+        hora_base = st.time_input("Hora Atual (DF):", value=agora_bsb.time())
+
+    dt_inicio_selecionado = datetime.combine(
+        data_base, hora_base, tzinfo=FUSO_BSB
+    )
+
+    st.subheader("2. Horário da Previsão (Até Quando Simular)")
+    c_alvo1, c_alvo2 = st.columns(2)
+    with c_alvo1:
+        data_alvo = st.date_input(
+            "Data Alvo:",
+            value=agora_bsb.date(),
+            help="Se for simular para a madrugada do dia seguinte, avance 1 dia.",
         )
-    with col_h2:
+    with c_alvo2:
+        hora_alvo = st.time_input("Hora Alvo:", value=time(5, 0))
+
+    dt_alvo_selecionado = datetime.combine(data_alvo, hora_alvo, tzinfo=FUSO_BSB)
+
+    # Verificação do intervalo
+    diff_horas = (
+        dt_alvo_selecionado - dt_inicio_selecionado
+    ).total_seconds() / 3600.0
+    if diff_horas < 0:
+        st.error(
+            "⚠️ O horário alvo selecionado é ANTERIOR ao horário atual. Ajuste a data ou a hora."
+        )
+    else:
+        st.caption(
+            f"⏱️ Intervalo calculado: **{diff_horas:.2f} horas** até o horário alvo."
+        )
+
+    st.divider()
+
+    st.subheader("3. Região e Filtros")
+    col_reg_b, col_filtro = st.columns(2)
+    with col_reg_b:
         regiao_bat = st.selectbox(
             "Filtrar por Região:", list(REGIOES_DF.keys()), key="regiao_bat_sel"
         )
-    with col_h3:
+    with col_filtro:
         filtro_status = st.selectbox(
             "Exibir no Mapa:",
             ["Apenas Críticos (<= 20%)", "Apenas Alerta (21% a 30%)", "Todos"],
@@ -1226,7 +1262,9 @@ with tab_bateria:
         )
 
     if st.button("🔍 Calcular Previsão e Mostrar Mapa", use_container_width=True):
-        if (
+        if diff_horas < 0:
+            st.error("Corrija as datas/horários antes de continuar.")
+        elif (
             regiao_bat == "🖊️ Desenhar Área no Mapa"
             and reg_info_override_bat is None
         ):
@@ -1262,15 +1300,14 @@ with tab_bateria:
                         continue
 
                     bat_atual = round(bat_raw * 100, 1)
-                    bat_futura, horas_espera = projetar_bateria(
-                        bat_atual, horario_alvo
+                    bat_futura, horas_calc = projetar_bateria_datas(
+                        bat_atual, dt_inicio_selecionado, dt_alvo_selecionado
                     )
 
                     patinetes_processados.append({
                         "identifier": b.get("identifier", "Sem ID"),
                         "bateria_atual": bat_atual,
                         "bateria_futura": bat_futura,
-                        "horas_espera": horas_espera,
                         "lat": lat_b,
                         "lng": lng_b,
                     })
@@ -1279,7 +1316,6 @@ with tab_bateria:
                     st.warning("Nenhum patinete encontrado nessa área.")
                 else:
                     df_bat = pd.DataFrame(patinetes_processados)
-                    horas_diff = df_bat["horas_espera"].iloc[0]
 
                     if filtro_status == "Apenas Críticos (<= 20%)":
                         df_exibicao = df_bat[df_bat["bateria_futura"] <= 20]
@@ -1292,7 +1328,7 @@ with tab_bateria:
                         df_exibicao = df_bat
 
                     st.info(
-                        f"⏱️ Tempo até o horário alvo: **{horas_diff:.1f} horas** (consumo de ~1,69% por hora parado)"
+                        f"⏱️ Tempo simulado: **{diff_horas:.2f} horas** (consumo de ~1,69% por hora parado)"
                     )
                     st.success(
                         f"📍 Exibindo **{len(df_exibicao)}** patinetes de um total de {len(df_bat)} na região."
@@ -1323,7 +1359,7 @@ with tab_bateria:
                             popup_html = f"""
                             <b>{id_p}</b><br>
                             Bateria agora: <b>{bat_a}%</b><br>
-                            Às {horario_alvo.strftime('%H:%M')}: <b>{bat_f}%</b><br>
+                            Às {dt_alvo_selecionado.strftime('%d/%m %H:%M')}: <b>{bat_f}%</b><br>
                             <a href="{lk}" target="_blank">🧭 Abrir no Maps</a>
                             """
 
@@ -1335,7 +1371,7 @@ with tab_bateria:
                                 fill_color=cor,
                                 fill_opacity=0.85,
                                 popup=popup_html,
-                                tooltip=f"{id_p} | {bat_f}% às {horario_alvo.strftime('%H:%M')}",
+                                tooltip=f"{id_p} | {bat_f}% às {dt_alvo_selecionado.strftime('%H:%M')}",
                             ).add_to(m_bat)
 
                         st_folium(
@@ -1345,9 +1381,9 @@ with tab_bateria:
                             returned_objects=[],
                         )
                         st.caption(
-                            "🔴 <= 10% (crítico imediato) · 🟠 11% a 20% (recolher) · 🟡 21% a 30% · 🟢 > 30%"
+                            "🔴 <= 10% (crítico) · 🟠 11% a 20% (recolher) · 🟡 21% a 30% · 🟢 > 30%"
                         )
                     else:
                         st.warning(
-                            "Nenhum patinete se enquadra no critério do filtro selecionado para esse horário."
+                            "Nenhum patinete se enquadra no filtro selecionado para esse intervalo de tempo."
                         )
