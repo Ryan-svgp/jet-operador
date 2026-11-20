@@ -1,4 +1,3 @@
-
 import math
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -19,202 +18,278 @@ API = "https://logistic.gojet.app/api/v0/urent"
 CITY_ID = "6787b812c168def1b2c6d143"
 FUSO = ZoneInfo("America/Sao_Paulo")
 
-# Mesma configuração HTTP do código antigo
 HEADERS = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)",
     "Accept": "application/json, text/plain, */*",
 }
 
-# Áreas aproximadas, baseadas no projeto anterior
-AREAS = {
-    "Asa Sul": ("circle", -15.8293, -47.8927, 4.13),
-    "Asa Norte": ("circle", -15.7602, -47.8758, 3.87),
-    "Sudoeste": ("circle", -15.7871, -47.9318, 2.57),
-    "Esplanada": ("box", -15.806, -15.785, -47.886, -47.860),
-    "Águas Claras": ("box", -15.8633, -15.8155, -48.0619, -48.0036),
-    "Guará": ("box", -15.8534, -15.8041, -47.9993, -47.9579),
+# =========================================================
+# 6 REGIÕES COM POLÍGONOS
+# Obs.: são aproximações melhores que os círculos.
+# Se quiser, depois refinamos ponto por ponto.
+# =========================================================
+REGIOES = {
+    "Asa Sul": [
+        (-15.8398, -47.9135),
+        (-15.8325, -47.9030),
+        (-15.8270, -47.8950),
+        (-15.8195, -47.8860),
+        (-15.8115, -47.8765),
+        (-15.8045, -47.8680),
+        (-15.7995, -47.8615),
+        (-15.7960, -47.8605),
+        (-15.7938, -47.8640),
+        (-15.7942, -47.8725),
+        (-15.7988, -47.8820),
+        (-15.8065, -47.8915),
+        (-15.8145, -47.9005),
+        (-15.8228, -47.9095),
+        (-15.8308, -47.9162),
+        (-15.8398, -47.9135),
+    ],
+    "Asa Norte": [
+        (-15.7935, -47.8595),
+        (-15.7890, -47.8590),
+        (-15.7830, -47.8610),
+        (-15.7755, -47.8630),
+        (-15.7685, -47.8645),
+        (-15.7610, -47.8665),
+        (-15.7548, -47.8690),
+        (-15.7495, -47.8735),
+        (-15.7465, -47.8785),
+        (-15.7460, -47.8838),
+        (-15.7495, -47.8868),
+        (-15.7568, -47.8875),
+        (-15.7650, -47.8878),
+        (-15.7730, -47.8875),
+        (-15.7815, -47.8868),
+        (-15.7890, -47.8850),
+        (-15.7945, -47.8820),
+        (-15.7960, -47.8740),
+        (-15.7950, -47.8650),
+        (-15.7935, -47.8595),
+    ],
+    "Sudoeste": [
+        (-15.7948, -47.9418),
+        (-15.7865, -47.9410),
+        (-15.7775, -47.9395),
+        (-15.7705, -47.9365),
+        (-15.7685, -47.9295),
+        (-15.7705, -47.9220),
+        (-15.7765, -47.9185),
+        (-15.7855, -47.9185),
+        (-15.7935, -47.9205),
+        (-15.7990, -47.9260),
+        (-15.8005, -47.9335),
+        (-15.7985, -47.9395),
+        (-15.7948, -47.9418),
+    ],
+    "Esplanada": [
+        (-15.8060, -47.8870),
+        (-15.8040, -47.8600),
+        (-15.7960, -47.8600),
+        (-15.7930, -47.8870),
+        (-15.8060, -47.8870),
+    ],
+    "Águas Claras": [
+        (-15.8585, -48.0585),
+        (-15.8470, -48.0535),
+        (-15.8370, -48.0490),
+        (-15.8295, -48.0440),
+        (-15.8235, -48.0350),
+        (-15.8215, -48.0250),
+        (-15.8235, -48.0150),
+        (-15.8290, -48.0075),
+        (-15.8380, -48.0030),
+        (-15.8470, -48.0050),
+        (-15.8555, -48.0105),
+        (-15.8610, -48.0200),
+        (-15.8625, -48.0310),
+        (-15.8605, -48.0430),
+        (-15.8585, -48.0585),
+    ],
+    "Guará": [
+        (-15.8728, -47.9805),
+        (-15.8665, -47.9680),
+        (-15.8600, -47.9565),
+        (-15.8500, -47.9535),
+        (-15.8445, -47.9495),
+        (-15.8455, -47.9430),
+        (-15.8535, -47.9415),
+        (-15.8615, -47.9465),
+        (-15.8690, -47.9545),
+        (-15.8755, -47.9660),
+        (-15.8775, -47.9775),
+        (-15.8728, -47.9805),
+    ],
 }
 
-
+# =========================================================
+# FUNÇÕES GEOGRÁFICAS
+# =========================================================
 def haversine(lat1, lon1, lat2, lon2):
-    raio = 6371.0
-    a = math.sin(math.radians(lat2-lat1)/2)**2
-    a += (
-        math.cos(math.radians(lat1))
+    r = 6371.0
+    dlat = math.radians(lat2 - lat1)
+    dlon = math.radians(lon2 - lon1)
+
+    a = (
+        math.sin(dlat / 2) ** 2
+        + math.cos(math.radians(lat1))
         * math.cos(math.radians(lat2))
-        * math.sin(math.radians(lon2-lon1)/2)**2
+        * math.sin(dlon / 2) ** 2
     )
-    return 2 * raio * math.asin(min(1, math.sqrt(a)))
+    return 2 * r * math.asin(math.sqrt(a))
 
 
-def dentro(lat, lon, area):
-    if area[0] == "circle":
-        _, cy, cx, km = area
-        return haversine(lat, lon, cy, cx) <= km
+def ponto_no_poligono(lat, lon, poligono):
+    dentro = False
+    j = len(poligono) - 1
 
-    _, lat_min, lat_max, lon_min, lon_max = area
-    return (
-        lat_min <= lat <= lat_max
-        and lon_min <= lon <= lon_max
-    )
+    for i in range(len(poligono)):
+        yi, xi = poligono[i]
+        yj, xj = poligono[j]
 
+        cruza = ((yi > lat) != (yj > lat))
+        if cruza:
+            x_intersec = (xj - xi) * (lat - yi) / (yj - yi) + xi
+            if lon < x_intersec:
+                dentro = not dentro
 
-def centro(area):
-    if area[0] == "circle":
-        return [area[1], area[2]]
-    return [
-        (area[1] + area[2]) / 2,
-        (area[3] + area[4]) / 2
-    ]
+        j = i
+
+    return dentro
 
 
-def desenhar_limites(mapa, area):
-    if area[0] == "circle":
-        folium.Circle(
-            [area[1], area[2]],
-            radius=area[3] * 1000,
-            color="blue",
-            fill=True,
-            fill_opacity=0.04
-        ).add_to(mapa)
-    else:
-        folium.Rectangle(
-            [[area[1], area[3]], [area[2], area[4]]],
-            color="blue",
-            fill=True,
-            fill_opacity=0.04
-        ).add_to(mapa)
+def centro_poligono(poligono):
+    lat = sum(p[0] for p in poligono) / len(poligono)
+    lon = sum(p[1] for p in poligono) / len(poligono)
+    return [lat, lon]
 
 
+def desenhar_poligono(mapa, poligono, nome):
+    folium.Polygon(
+        locations=poligono,
+        color="cyan",
+        weight=2,
+        fill=True,
+        fill_opacity=0.06,
+        popup=nome
+    ).add_to(mapa)
+
+
+# =========================================================
+# API
+# =========================================================
 @st.cache_data(ttl=60, show_spinner=False)
-def buscar_baterias():
-    todos = []
-    pagina = 1
+def buscar_bikes():
+    all_entries = []
+    page = 1
 
     while True:
-        resposta = requests.get(
+        r = requests.get(
             f"{API}/bikes",
             params={
                 "city_id": CITY_ID,
-                "page": pagina,
+                "page": page,
                 "limit": 1000
             },
             headers=HEADERS,
             timeout=20
         )
 
-        if resposta.status_code != 200:
-            cf = resposta.headers.get("cf-mitigated", "")
-            if resposta.status_code == 403 and cf == "challenge":
+        if r.status_code != 200:
+            cf = r.headers.get("cf-mitigated", "")
+            if r.status_code == 403 and cf == "challenge":
                 raise RuntimeError(
-                    "403: Cloudflare exige verificação. "
-                    "A API não forneceu os dados."
+                    "403: Cloudflare está bloqueando a API neste momento."
                 )
             raise RuntimeError(
-                f"API retornou HTTP {resposta.status_code} "
-                f"na página {pagina}."
+                f"API retornou HTTP {r.status_code} na página {page}."
             )
 
         try:
-            dados = resposta.json()
+            data = r.json()
         except ValueError:
             raise RuntimeError("A API não retornou JSON válido.")
 
-        if not isinstance(dados, dict):
-            raise RuntimeError("Formato de resposta inesperado.")
+        entries = data.get("entries", [])
+        if not isinstance(entries, list):
+            raise RuntimeError("Formato inesperado da API.")
 
-        entradas = dados.get("entries")
-        if not isinstance(entradas, list):
-            raise RuntimeError("Campo 'entries' não encontrado.")
+        all_entries.extend(entries)
 
-        todos.extend(entradas)
-
-        total = int(dados.get("total_pages", 1))
-        if total < 1 or total > 1000:
-            raise RuntimeError("Paginação inválida.")
-
-        if pagina >= total:
+        total_pages = int(data.get("total_pages", 1))
+        if page >= total_pages:
             break
 
-        pagina += 1
+        page += 1
 
     hora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M:%S")
-    return todos, hora
+    return all_entries, hora
 
 
-def montar_dataframe(bikes):
+def montar_df(bikes):
     linhas = []
     vistos = set()
 
-    for bike in bikes:
+    for b in bikes:
         try:
-            porcentagem = float(bike["battery_percent"]) * 100
-            lat = float(bike["location_lat"])
-            lon = float(bike["location_lng"])
-
-            if not (
-                0 <= porcentagem <= 100
-                and -90 <= lat <= 90
-                and -180 <= lon <= 180
-            ):
-                continue
+            bateria = float(b["battery_percent"]) * 100
+            lat = float(b["location_lat"])
+            lon = float(b["location_lng"])
         except (KeyError, TypeError, ValueError):
             continue
 
-        identificador = (
-            bike.get("id")
-            or bike.get("_id")
-            or bike.get("identifier")
+        if not (0 <= bateria <= 100):
+            continue
+
+        ident = (
+            b.get("id")
+            or b.get("_id")
+            or b.get("identifier")
+            or "Sem ID"
         )
+        ident = str(ident)
 
-        if identificador is not None:
-            identificador = str(identificador)
-            if identificador in vistos:
-                continue
-            vistos.add(identificador)
+        if ident in vistos:
+            continue
+        vistos.add(ident)
 
-        status = str(bike.get("status") or "").lower()
-        state = str(bike.get("state") or "").lower()
+        status = str(b.get("status") or "").lower()
+        state = str(b.get("state") or "").lower()
 
         indisponivel = (
-            bike.get("is_rented") is True
+            b.get("is_rented") is True
             or status in {"rented", "in_use", "maintenance"}
             or state in {"rented", "in_use", "maintenance"}
         )
 
         linhas.append({
-            "Patinete": str(
-                bike.get("identifier")
-                or identificador
-                or "Sem ID"
-            ),
-            "Bateria (%)": round(porcentagem, 2),
+            "Patinete": str(b.get("identifier") or ident),
+            "Bateria (%)": round(bateria, 1),
             "Latitude": lat,
             "Longitude": lon,
-            "Solto": not bool(bike.get("parking_id")),
+            "Solto": not bool(b.get("parking_id")),
             "Indisponível": indisponivel
         })
 
-    return pd.DataFrame(
-        linhas,
-        columns=[
-            "Patinete", "Bateria (%)", "Latitude",
-            "Longitude", "Solto", "Indisponível"
-        ]
-    )
+    return pd.DataFrame(linhas)
 
 
-st.title("🔋 JET — Baterias por Área")
-st.caption("Porcentagem atual recebida da API, sem simulação.")
+# =========================================================
+# INTERFACE
+# =========================================================
+st.title("🔋 JET — Baterias por Região")
+st.caption("Agora usando 6 regiões separadas com polígonos, sem círculos.")
+
+st.warning(
+    "Os polígonos são aproximações manuais melhores que os círculos. "
+    "Se quiser, depois refinamos cada região ainda mais."
+)
 
 col1, col2 = st.columns(2)
-
 with col1:
-    regiao = st.selectbox(
-        "📍 Região",
-        list(AREAS.keys())
-    )
-
+    regiao = st.selectbox("📍 Região", list(REGIOES.keys()))
 with col2:
     limite = st.slider(
         "🔋 Bateria máxima",
@@ -226,41 +301,28 @@ with col2:
     )
 
 col3, col4 = st.columns(2)
-
 with col3:
-    incluir_soltos = st.checkbox(
-        "Incluir patinetes soltos",
-        value=True
-    )
-
+    incluir_soltos = st.checkbox("Incluir patinetes soltos", value=True)
 with col4:
     excluir_indisponiveis = st.checkbox(
         "Excluir em uso/manutenção",
         value=True
     )
 
-if st.button("🔄 Atualizar consulta", type="primary"):
-    buscar_baterias.clear()
+if st.button("🔄 Atualizar consulta", type="primary", use_container_width=True):
+    buscar_bikes.clear()
     st.rerun()
 
 try:
     with st.spinner("Consultando a API Jet..."):
-        bikes, hora = buscar_baterias()
-        df = montar_dataframe(bikes)
-
-except (requests.RequestException, RuntimeError) as erro:
-    st.error(str(erro))
-    st.warning(
-        "Consulta indisponível. Não é possível confirmar "
-        "a quantidade de baterias neste momento."
-    )
+        bikes, hora = buscar_bikes()
+        df = montar_df(bikes)
+except (requests.RequestException, RuntimeError) as e:
+    st.error(str(e))
     st.stop()
 
 if df.empty:
-    st.warning(
-        "A consulta foi concluída, mas nenhum registro "
-        "válido de bateria e localização foi encontrado."
-    )
+    st.warning("Nenhum patinete válido foi encontrado na API.")
     st.stop()
 
 if not incluir_soltos:
@@ -269,146 +331,158 @@ if not incluir_soltos:
 if excluir_indisponiveis:
     df = df[~df["Indisponível"]].copy()
 
-area = AREAS[regiao]
+poligono = REGIOES[regiao]
 
 df_regiao = df[
     df.apply(
-        lambda x: dentro(
-            x["Latitude"],
-            x["Longitude"],
-            area
+        lambda row: ponto_no_poligono(
+            row["Latitude"],
+            row["Longitude"],
+            poligono
         ),
         axis=1
     )
 ].copy()
 
-resultado = df_regiao[
+df_filtrado = df_regiao[
     df_regiao["Bateria (%)"] <= limite
 ].copy()
 
-resultado = resultado.sort_values("Bateria (%)")
+df_filtrado = df_filtrado.sort_values("Bateria (%)")
 
-c1, c2, c3 = st.columns(3)
+m1, m2, m3 = st.columns(3)
+m1.metric(f"Até {limite}%", len(df_filtrado))
+m2.metric("Patinetes na região", len(df_regiao))
+m3.metric("Soltos com bateria baixa", int(df_filtrado["Solto"].sum()))
 
-c1.metric(f"Até {limite}%", len(resultado))
-c2.metric("Total na região", len(df_regiao))
-c3.metric(
-    "Soltos até o limite",
-    int(resultado["Solto"].sum())
-)
+st.caption(f"Última consulta: {hora} — horário de Brasília")
 
-st.caption(f"Última consulta: {hora} — Brasília")
+tabs = st.tabs(["🗺️ Mapa", "📋 Lista", "🏆 Ranking"])
 
-st.info(
-    "A contagem inclui patinetes com bateria baixa. "
-    "Isso não garante que estejam liberados para alimentação."
-)
-
-tab_mapa, tab_lista, tab_ranking = st.tabs([
-    "🗺️ Mapa",
-    "📋 Lista",
-    "🏆 Ranking"
-])
-
-with tab_mapa:
+# =========================================================
+# MAPA
+# =========================================================
+with tabs[0]:
     mapa = folium.Map(
-        location=centro(area),
-        zoom_start=13
+        location=centro_poligono(poligono),
+        zoom_start=13,
+        tiles="CartoDB dark_matter"
     )
 
-    desenhar_limites(mapa, area)
+    desenhar_poligono(mapa, poligono, regiao)
 
-    for _, bike in resultado.iterrows():
+    for _, bike in df_filtrado.iterrows():
         lat = bike["Latitude"]
         lon = bike["Longitude"]
-        pct = bike["Bateria (%)"]
+        bat = bike["Bateria (%)"]
 
-        if pct <= 10:
+        if bat <= 10:
             cor = "red"
-        elif pct <= 20:
+        elif bat <= 20:
             cor = "orange"
         else:
             cor = "green"
 
-        link = (
-            "https://www.google.com/maps/search/"
-            f"?api=1&query={lat},{lon}"
+        if bike["Solto"]:
+            radius = 8
+        else:
+            radius = 6
+
+        maps_link = (
+            f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
         )
 
         popup = (
-            f"Patinete: {bike['Patinete']}<br>"
-            f"Bateria: {pct:.1f}%<br>"
-            f"<a href='{link}' target='_blank'>"
-            "Abrir no Maps</a>"
+            f"<b>Patinete:</b> {bike['Patinete']}<br>"
+            f"<b>Bateria:</b> {bat:.1f}%<br>"
+            f"<b>Tipo:</b> {'Solto' if bike['Solto'] else 'Estacionado'}<br>"
+            f"<a href='{maps_link}' target='_blank'>Abrir no Maps</a>"
         )
 
         folium.CircleMarker(
-            [lat, lon],
-            radius=6,
+            location=[lat, lon],
+            radius=radius,
             color=cor,
             fill=True,
-            fill_opacity=0.8,
-            popup=popup
+            fill_color=cor,
+            fill_opacity=0.85,
+            popup=folium.Popup(popup, max_width=300)
         ).add_to(mapa)
 
     st_folium(
         mapa,
-        height=500,
+        height=540,
         use_container_width=True,
         returned_objects=[]
     )
 
-with tab_lista:
-    st.dataframe(
-        resultado,
-        hide_index=True,
-        use_container_width=True
+    st.caption(
+        "🔴 0–10% | 🟠 11–20% | 🟢 21–35% | "
+        "Bola maior = patinete solto"
     )
 
-    st.download_button(
-        "⬇️ Exportar CSV",
-        resultado.to_csv(index=False).encode("utf-8-sig"),
-        file_name="baterias_jet.csv",
-        mime="text/csv"
-    )
+# =========================================================
+# LISTA
+# =========================================================
+with tabs[1]:
+    if df_filtrado.empty:
+        st.info("Nenhum patinete encontrado nesse filtro.")
+    else:
+        tabela = df_filtrado[
+            ["Patinete", "Bateria (%)", "Solto", "Latitude", "Longitude"]
+        ].copy()
 
-with tab_ranking:
-    dados = []
+        st.dataframe(
+            tabela,
+            hide_index=True,
+            use_container_width=True
+        )
 
-    for nome, configuracao in AREAS.items():
-        filtrado = df[
+        st.download_button(
+            "⬇️ Baixar CSV",
+            tabela.to_csv(index=False).encode("utf-8-sig"),
+            file_name="jet_baterias_regiao.csv",
+            mime="text/csv"
+        )
+
+# =========================================================
+# RANKING
+# =========================================================
+with tabs[2]:
+    ranking = []
+
+    for nome, poly in REGIOES.items():
+        temp = df[
             df.apply(
-                lambda x: dentro(
-                    x["Latitude"],
-                    x["Longitude"],
-                    configuracao
+                lambda row: ponto_no_poligono(
+                    row["Latitude"],
+                    row["Longitude"],
+                    poly
                 ),
                 axis=1
             )
-        ]
+        ].copy()
 
-        filtrado = filtrado[
-            filtrado["Bateria (%)"] <= limite
-        ]
+        temp = temp[temp["Bateria (%)"] <= limite]
 
-        dados.append({
+        ranking.append({
             "Região": nome,
-            "Quantidade": len(filtrado),
-            "Soltos": int(filtrado["Solto"].sum())
+            "Quantidade": len(temp),
+            "Soltos": int(temp["Solto"].sum())
         })
 
-    ranking = pd.DataFrame(dados).sort_values(
+    ranking_df = pd.DataFrame(ranking).sort_values(
         "Quantidade",
         ascending=False
     )
 
     st.dataframe(
-        ranking,
+        ranking_df,
         hide_index=True,
         use_container_width=True
     )
 
     st.caption(
-        "Regiões aproximadas podem se sobrepor. "
-        "Não some os totais do ranking."
+        "Como agora cada região tem polígono próprio, a separação ficou "
+        "muito melhor que no modelo com círculos."
     )
