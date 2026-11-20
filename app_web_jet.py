@@ -579,7 +579,7 @@ with aba_mapa:
     mapa = folium.Map(
         location=[centro_lat, centro_lon],
         zoom_start=13,
-        tiles="CartoDB positron"
+        tiles="OpenStreetMap"
     )
 
     # Mostra as seis divisões.
