@@ -1,6 +1,6 @@
-streamlit>=1.32
-requests
-folium
-streamlit-folium
-pandas
-supabase
+
+streamlit>=1.35,<2
+requests>=2.31,<3
+pandas>=2.0,<3
+folium>=0.16,<1
+streamlit-folium>=0.20,<1
