@@ -1,4 +1,5 @@
-import math
+
+import html
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -23,358 +24,588 @@ HEADERS = {
     "Accept": "application/json, text/plain, */*",
 }
 
-# =========================================================
-# 6 REGIÕES COM POLÍGONOS
-# Obs.: são aproximações melhores que os círculos.
-# Se quiser, depois refinamos ponto por ponto.
-# =========================================================
-REGIOES = {
-    "Asa Sul": [
-        (-15.8398, -47.9135),
-        (-15.8325, -47.9030),
-        (-15.8270, -47.8950),
-        (-15.8195, -47.8860),
-        (-15.8115, -47.8765),
-        (-15.8045, -47.8680),
-        (-15.7995, -47.8615),
-        (-15.7960, -47.8605),
-        (-15.7938, -47.8640),
-        (-15.7942, -47.8725),
-        (-15.7988, -47.8820),
-        (-15.8065, -47.8915),
-        (-15.8145, -47.9005),
-        (-15.8228, -47.9095),
-        (-15.8308, -47.9162),
-        (-15.8398, -47.9135),
-    ],
-    "Asa Norte": [
-        (-15.7935, -47.8595),
-        (-15.7890, -47.8590),
-        (-15.7830, -47.8610),
-        (-15.7755, -47.8630),
-        (-15.7685, -47.8645),
-        (-15.7610, -47.8665),
-        (-15.7548, -47.8690),
-        (-15.7495, -47.8735),
-        (-15.7465, -47.8785),
-        (-15.7460, -47.8838),
-        (-15.7495, -47.8868),
-        (-15.7568, -47.8875),
-        (-15.7650, -47.8878),
-        (-15.7730, -47.8875),
-        (-15.7815, -47.8868),
-        (-15.7890, -47.8850),
-        (-15.7945, -47.8820),
-        (-15.7960, -47.8740),
-        (-15.7950, -47.8650),
-        (-15.7935, -47.8595),
-    ],
-    "Sudoeste": [
-        (-15.7948, -47.9418),
-        (-15.7865, -47.9410),
-        (-15.7775, -47.9395),
-        (-15.7705, -47.9365),
-        (-15.7685, -47.9295),
-        (-15.7705, -47.9220),
-        (-15.7765, -47.9185),
-        (-15.7855, -47.9185),
-        (-15.7935, -47.9205),
-        (-15.7990, -47.9260),
-        (-15.8005, -47.9335),
-        (-15.7985, -47.9395),
-        (-15.7948, -47.9418),
-    ],
-    "Esplanada": [
-        (-15.8060, -47.8870),
-        (-15.8040, -47.8600),
-        (-15.7960, -47.8600),
-        (-15.7930, -47.8870),
-        (-15.8060, -47.8870),
-    ],
-    "Águas Claras": [
-        (-15.8585, -48.0585),
-        (-15.8470, -48.0535),
-        (-15.8370, -48.0490),
-        (-15.8295, -48.0440),
-        (-15.8235, -48.0350),
-        (-15.8215, -48.0250),
-        (-15.8235, -48.0150),
-        (-15.8290, -48.0075),
-        (-15.8380, -48.0030),
-        (-15.8470, -48.0050),
-        (-15.8555, -48.0105),
-        (-15.8610, -48.0200),
-        (-15.8625, -48.0310),
-        (-15.8605, -48.0430),
-        (-15.8585, -48.0585),
-    ],
-    "Guará": [
-        (-15.8728, -47.9805),
-        (-15.8665, -47.9680),
-        (-15.8600, -47.9565),
-        (-15.8500, -47.9535),
-        (-15.8445, -47.9495),
-        (-15.8455, -47.9430),
-        (-15.8535, -47.9415),
-        (-15.8615, -47.9465),
-        (-15.8690, -47.9545),
-        (-15.8755, -47.9660),
-        (-15.8775, -47.9775),
-        (-15.8728, -47.9805),
-    ],
+# ==========================================
+# ZONAS OPERACIONAIS DA JET
+# Coordenadas obtidas do monitor do Victor.
+# Cada linha contém latitude,longitude.
+# ==========================================
+
+REGIOES_TEXTO = {
+    "Asa Sul": """
+-15.8113725,-47.9407954
+-15.8091044,-47.9542923
+-15.8439492,-47.9592705
+-15.8498924,-47.9320621
+-15.8490678,-47.9188442
+-15.8395725,-47.8982878
+-15.8354027,-47.8911638
+-15.8301374,-47.8870174
+-15.8243787,-47.8816795
+-15.8127763,-47.8607368
+-15.8101337,-47.8664447
+-15.8098395,-47.8702828
+-15.8052587,-47.8841954
+-15.8030315,-47.8875593
+-15.7992946,-47.8932023
+-15.7997253,-47.8934786
+-15.7974051,-47.8966355
+-15.7954164,-47.8954872
+-15.7954165,-47.8972907
+-15.8054500,-47.9069000
+-15.8047502,-47.9094325
+-15.8088795,-47.9144079
+-15.8111170,-47.9146198
+-15.8120951,-47.9163767
+-15.8116770,-47.9189196
+-15.8125390,-47.9206468
+-15.8142448,-47.9228193
+-15.8145738,-47.9254800
+-15.8122655,-47.9272879
+-15.8107324,-47.9266335
+-15.8073259,-47.9287791
+-15.8113725,-47.9407954
+""",
+
+    "Asa Norte": """
+-15.7323869,-47.9085234
+-15.7268348,-47.8885460
+-15.7697881,-47.8463173
+-15.7828381,-47.8579903
+-15.7874219,-47.8561234
+-15.7921297,-47.8559305
+-15.7902717,-47.8588915
+-15.7865962,-47.8737617
+-15.7853727,-47.8738689
+-15.7841492,-47.8739762
+-15.7839835,-47.8791469
+-15.7838177,-47.8843179
+-15.7837355,-47.8868889
+-15.7836531,-47.8894601
+-15.7834885,-47.8946024
+-15.7822110,-47.8950342
+-15.7809331,-47.8954661
+-15.7800170,-47.8974533
+-15.7792812,-47.8994572
+-15.7797406,-47.9026380
+-15.7803548,-47.9046455
+-15.7777120,-47.9037016
+-15.7367409,-47.9080414
+-15.7401319,-47.9189514
+-15.7406681,-47.9195565
+-15.7332857,-47.9199494
+-15.7323869,-47.9085234
+""",
+
+    "Sudoeste": """
+-15.7735853,-47.9430470
+-15.8091044,-47.9542923
+-15.8113725,-47.9407954
+-15.8073259,-47.9287792
+-15.8046005,-47.9210437
+-15.7979523,-47.9122246
+-15.7948861,-47.9099366
+-15.7922898,-47.9095155
+-15.7913040,-47.9092956
+-15.7904263,-47.9088209
+-15.7894248,-47.9076246
+-15.7878659,-47.9071283
+-15.7848306,-47.9166234
+-15.7825468,-47.9157987
+-15.7735853,-47.9430470
+""",
+
+    "Esplanada": """
+-15.8101329,-47.8664475
+-15.8127763,-47.8607369
+-15.8030314,-47.8480339
+-15.7972916,-47.8510380
+-15.7921298,-47.8559303
+-15.7902717,-47.8588915
+-15.7865962,-47.8737617
+-15.7841492,-47.8739762
+-15.7834884,-47.8946024
+-15.7809331,-47.8954661
+-15.7800168,-47.8974536
+-15.7792812,-47.8994572
+-15.7797406,-47.9026382
+-15.7803548,-47.9046455
+-15.7832690,-47.9057591
+-15.7822998,-47.9092782
+-15.7843531,-47.9099285
+-15.7825468,-47.9157987
+-15.7848306,-47.9166233
+-15.7878659,-47.9071284
+-15.7902705,-47.9033179
+-15.7905182,-47.9003573
+-15.7912615,-47.8982549
+-15.7934769,-47.8942913
+-15.7938956,-47.8945494
+-15.7940311,-47.8946329
+-15.7941671,-47.8947168
+-15.7944395,-47.8948844
+-15.7946901,-47.8950394
+-15.7948117,-47.8951142
+-15.7949334,-47.8951892
+-15.7951730,-47.8953370
+-15.7952946,-47.8954119
+-15.7954163,-47.8954871
+-15.7959095,-47.8957718
+-15.7964056,-47.8960583
+-15.7964367,-47.8960762
+-15.7964677,-47.8960942
+-15.7965297,-47.8961300
+-15.7966538,-47.8962016
+-15.7969017,-47.8963448
+-15.7971500,-47.8964878
+-15.7972731,-47.8965592
+-15.7973042,-47.8965772
+-15.7973199,-47.8965863
+-15.7973277,-47.8965908
+-15.7973355,-47.8965953
+-15.7973439,-47.8966001
+-15.7973525,-47.8966051
+-15.7973704,-47.8966154
+-15.7973878,-47.8966255
+-15.7973966,-47.8966306
+-15.7974052,-47.8966356
+-15.7975502,-47.8964380
+-15.7976952,-47.8962407
+-15.7979852,-47.8958462
+-15.7985653,-47.8950570
+-15.7997253,-47.8934786
+-15.7992945,-47.8932023
+-15.8030299,-47.8875439
+-15.8052595,-47.8841971
+-15.8098403,-47.8702818
+-15.8101329,-47.8664475
+""",
+
+    "Águas Claras": """
+-15.8395727,-48.0001688
+-15.8131067,-48.0111980
+-15.8168595,-48.0215836
+-15.8256118,-48.0353165
+-15.8332979,-48.0676736
+-15.8750792,-48.0462174
+-15.8791201,-48.0324412
+-15.8792238,-48.0137086
+-15.8513801,-48.0269694
+-15.8395727,-48.0001688
+""",
+
+    "Guará": """
+-15.8091044,-47.9542923
+-15.8054677,-47.9579830
+-15.8041463,-47.9674244
+-15.8048070,-47.9917145
+-15.8085233,-48.0020142
+-15.8131041,-48.0111967
+-15.8395726,-48.0001688
+-15.8613704,-47.9918003
+-15.8583981,-47.9606438
+-15.8439491,-47.9592706
+-15.8091044,-47.9542923
+"""
 }
 
-# =========================================================
-# FUNÇÕES GEOGRÁFICAS
-# =========================================================
-def haversine(lat1, lon1, lat2, lon2):
-    r = 6371.0
-    dlat = math.radians(lat2 - lat1)
-    dlon = math.radians(lon2 - lon1)
 
-    a = (
-        math.sin(dlat / 2) ** 2
-        + math.cos(math.radians(lat1))
-        * math.cos(math.radians(lat2))
-        * math.sin(dlon / 2) ** 2
-    )
-    return 2 * r * math.asin(math.sqrt(a))
+def converter_regiao(texto):
+    pontos = []
+    for linha in texto.strip().splitlines():
+        lat, lon = linha.strip().split(",")
+        pontos.append((float(lat), float(lon)))
+    return pontos
 
 
-def ponto_no_poligono(lat, lon, poligono):
+REGIOES = {
+    nome: converter_regiao(texto)
+    for nome, texto in REGIOES_TEXTO.items()
+}
+
+
+# ==========================================
+# IDENTIFICAR PATINETE DENTRO DA REGIÃO
+# ==========================================
+
+def ponto_no_poligono(lat, lon, pontos):
     dentro = False
-    j = len(poligono) - 1
+    anterior = pontos[-1]
 
-    for i in range(len(poligono)):
-        yi, xi = poligono[i]
-        yj, xj = poligono[j]
+    for atual in pontos:
+        y1, x1 = anterior
+        y2, x2 = atual
 
-        cruza = ((yi > lat) != (yj > lat))
-        if cruza:
-            x_intersec = (xj - xi) * (lat - yi) / (yj - yi) + xi
-            if lon < x_intersec:
+        if (y1 > lat) != (y2 > lat):
+            intersecao = (
+                (x2 - x1) * (lat - y1) / (y2 - y1) + x1
+            )
+            if lon < intersecao:
                 dentro = not dentro
 
-        j = i
+        anterior = atual
 
     return dentro
 
 
-def centro_poligono(poligono):
-    lat = sum(p[0] for p in poligono) / len(poligono)
-    lon = sum(p[1] for p in poligono) / len(poligono)
-    return [lat, lon]
+def identificar_regiao(row):
+    # Se um ponto estiver em duas zonas,
+    # atribui à primeira para não duplicar.
+    for nome, pontos in REGIOES.items():
+        if ponto_no_poligono(
+            row["Latitude"],
+            row["Longitude"],
+            pontos
+        ):
+            return nome
+
+    return None
 
 
-def desenhar_poligono(mapa, poligono, nome):
-    folium.Polygon(
-        locations=poligono,
-        color="cyan",
-        weight=2,
-        fill=True,
-        fill_opacity=0.06,
-        popup=nome
-    ).add_to(mapa)
+# ==========================================
+# CONSULTAR API
+# ==========================================
 
-
-# =========================================================
-# API
-# =========================================================
 @st.cache_data(ttl=60, show_spinner=False)
-def buscar_bikes():
-    all_entries = []
-    page = 1
+def consultar_api():
+    registros = []
+    pagina = 1
 
     while True:
-        r = requests.get(
+        resposta = requests.get(
             f"{API}/bikes",
             params={
                 "city_id": CITY_ID,
-                "page": page,
+                "page": pagina,
                 "limit": 1000
             },
             headers=HEADERS,
             timeout=20
         )
 
-        if r.status_code != 200:
-            cf = r.headers.get("cf-mitigated", "")
-            if r.status_code == 403 and cf == "challenge":
+        if resposta.status_code != 200:
+            challenge = (
+                resposta.headers.get("cf-mitigated") == "challenge"
+            )
+
+            if challenge:
                 raise RuntimeError(
-                    "403: Cloudflare está bloqueando a API neste momento."
+                    "403 - Cloudflare bloqueou a consulta."
                 )
+
             raise RuntimeError(
-                f"API retornou HTTP {r.status_code} na página {page}."
+                f"HTTP {resposta.status_code} "
+                f"na página {pagina}."
             )
 
         try:
-            data = r.json()
+            dados = resposta.json()
         except ValueError:
-            raise RuntimeError("A API não retornou JSON válido.")
+            raise RuntimeError(
+                "A API não retornou JSON válido."
+            )
 
-        entries = data.get("entries", [])
-        if not isinstance(entries, list):
-            raise RuntimeError("Formato inesperado da API.")
+        if not isinstance(dados, dict):
+            raise RuntimeError(
+                "Formato inesperado da API."
+            )
 
-        all_entries.extend(entries)
+        entradas = dados.get("entries")
 
-        total_pages = int(data.get("total_pages", 1))
-        if page >= total_pages:
+        if not isinstance(entradas, list):
+            raise RuntimeError(
+                "A API não retornou a lista de patinetes."
+            )
+
+        registros.extend(entradas)
+
+        total_paginas = int(
+            dados.get("total_pages", 1)
+        )
+
+        if total_paginas < 1 or total_paginas > 1000:
+            raise RuntimeError("Paginação inválida.")
+
+        if pagina >= total_paginas:
             break
 
-        page += 1
+        pagina += 1
 
-    hora = datetime.now(FUSO).strftime("%d/%m/%Y %H:%M:%S")
-    return all_entries, hora
+    atualizado = datetime.now(FUSO).strftime(
+        "%d/%m/%Y %H:%M:%S"
+    )
+
+    return registros, atualizado
 
 
-def montar_df(bikes):
+# ==========================================
+# PROCESSAR BATERIAS
+# ==========================================
+
+def preparar_dados(registros):
     linhas = []
     vistos = set()
 
-    for b in bikes:
+    for b in registros:
         try:
-            bateria = float(b["battery_percent"]) * 100
+            bateria = float(
+                b["battery_percent"]
+            ) * 100
+
             lat = float(b["location_lat"])
             lon = float(b["location_lng"])
+
         except (KeyError, TypeError, ValueError):
             continue
 
-        if not (0 <= bateria <= 100):
+        if not (
+            0 <= bateria <= 100
+            and -90 <= lat <= 90
+            and -180 <= lon <= 180
+        ):
             continue
 
-        ident = (
+        identidade = (
             b.get("id")
             or b.get("_id")
             or b.get("identifier")
-            or "Sem ID"
         )
-        ident = str(ident)
 
-        if ident in vistos:
-            continue
-        vistos.add(ident)
+        if identidade is not None:
+            identidade = str(identidade)
 
-        status = str(b.get("status") or "").lower()
-        state = str(b.get("state") or "").lower()
+            if identidade in vistos:
+                continue
+
+            vistos.add(identidade)
+
+        status = str(
+            b.get("status") or ""
+        ).lower()
+
+        estado = str(
+            b.get("state") or ""
+        ).lower()
 
         indisponivel = (
             b.get("is_rented") is True
-            or status in {"rented", "in_use", "maintenance"}
-            or state in {"rented", "in_use", "maintenance"}
+            or status in {
+                "rented", "in_use", "maintenance"
+            }
+            or estado in {
+                "rented", "in_use", "maintenance"
+            }
         )
 
         linhas.append({
-            "Patinete": str(b.get("identifier") or ident),
-            "Bateria (%)": round(bateria, 1),
+            "Patinete": str(
+                b.get("identifier")
+                or identidade
+                or "Sem ID"
+            ),
+            "Bateria (%)": round(bateria, 2),
             "Latitude": lat,
             "Longitude": lon,
             "Solto": not bool(b.get("parking_id")),
-            "Indisponível": indisponivel
+            "Indisponivel": indisponivel
         })
 
-    return pd.DataFrame(linhas)
+    return pd.DataFrame(
+        linhas,
+        columns=[
+            "Patinete",
+            "Bateria (%)",
+            "Latitude",
+            "Longitude",
+            "Solto",
+            "Indisponivel"
+        ]
+    )
 
 
-# =========================================================
-# INTERFACE
-# =========================================================
-st.title("🔋 JET — Baterias por Região")
-st.caption("Agora usando 6 regiões separadas com polígonos, sem círculos.")
+# ==========================================
+# INTERFACE DO STREAMLIT
+# ==========================================
 
-st.warning(
-    "Os polígonos são aproximações manuais melhores que os círculos. "
-    "Se quiser, depois refinamos cada região ainda mais."
+st.title("🔋 JET - Baterias por Região")
+
+st.caption(
+    "Mapa com os contornos das seis zonas "
+    "operacionais extraídos do monitor da Jet."
 )
 
 col1, col2 = st.columns(2)
+
 with col1:
-    regiao = st.selectbox("📍 Região", list(REGIOES.keys()))
+    regiao = st.selectbox(
+        "📍 Escolha a região",
+        list(REGIOES.keys())
+    )
+
 with col2:
     limite = st.slider(
-        "🔋 Bateria máxima",
+        "🔋 Bateria máxima (%)",
         min_value=0,
         max_value=35,
         value=35,
-        step=1,
-        format="%d%%"
+        step=1
     )
 
 col3, col4 = st.columns(2)
+
 with col3:
-    incluir_soltos = st.checkbox("Incluir patinetes soltos", value=True)
+    incluir_soltos = st.checkbox(
+        "Incluir patinetes soltos",
+        value=True
+    )
+
 with col4:
     excluir_indisponiveis = st.checkbox(
         "Excluir em uso/manutenção",
         value=True
     )
 
-if st.button("🔄 Atualizar consulta", type="primary", use_container_width=True):
-    buscar_bikes.clear()
+if st.button(
+    "🔄 Atualizar dados",
+    type="primary",
+    use_container_width=True
+):
+    consultar_api.clear()
     st.rerun()
 
+
+# ==========================================
+# CARREGAMENTO
+# ==========================================
+
 try:
-    with st.spinner("Consultando a API Jet..."):
-        bikes, hora = buscar_bikes()
-        df = montar_df(bikes)
-except (requests.RequestException, RuntimeError) as e:
-    st.error(str(e))
+    with st.spinner("Consultando baterias..."):
+        registros, atualizado = consultar_api()
+        df = preparar_dados(registros)
+
+except (requests.RequestException, RuntimeError) as erro:
+    st.error(f"Falha na consulta: {erro}")
+    st.warning(
+        "A API não forneceu dados atualizados. "
+        "Não é possível confirmar a contagem."
+    )
     st.stop()
 
 if df.empty:
-    st.warning("Nenhum patinete válido foi encontrado na API.")
+    st.warning(
+        "Nenhum registro válido de bateria "
+        "e localização foi recebido."
+    )
     st.stop()
 
 if not incluir_soltos:
     df = df[~df["Solto"]].copy()
 
 if excluir_indisponiveis:
-    df = df[~df["Indisponível"]].copy()
+    df = df[~df["Indisponivel"]].copy()
 
-poligono = REGIOES[regiao]
+df["Região"] = df.apply(
+    identificar_regiao,
+    axis=1
+)
 
 df_regiao = df[
-    df.apply(
-        lambda row: ponto_no_poligono(
-            row["Latitude"],
-            row["Longitude"],
-            poligono
-        ),
-        axis=1
-    )
+    df["Região"] == regiao
 ].copy()
 
 df_filtrado = df_regiao[
     df_regiao["Bateria (%)"] <= limite
-].copy()
+].sort_values("Bateria (%)").copy()
 
-df_filtrado = df_filtrado.sort_values("Bateria (%)")
+
+# ==========================================
+# QUANTIDADES
+# ==========================================
 
 m1, m2, m3 = st.columns(3)
-m1.metric(f"Até {limite}%", len(df_filtrado))
-m2.metric("Patinetes na região", len(df_regiao))
-m3.metric("Soltos com bateria baixa", int(df_filtrado["Solto"].sum()))
 
-st.caption(f"Última consulta: {hora} — horário de Brasília")
+m1.metric(
+    f"🔋 Baterias até {limite}%",
+    len(df_filtrado)
+)
 
-tabs = st.tabs(["🗺️ Mapa", "📋 Lista", "🏆 Ranking"])
+m2.metric(
+    "🛴 Patinetes na região",
+    len(df_regiao)
+)
 
-# =========================================================
+m3.metric(
+    "📍 Soltos até o limite",
+    int(df_filtrado["Solto"].sum())
+)
+
+st.caption(
+    f"Última consulta: {atualizado} "
+    f"(Brasília) | Registros: {len(registros)}"
+)
+
+st.info(
+    "A contagem representa patinetes com bateria "
+    "baixa. Não garante tarefa de alimentação "
+    "liberada no Jet Crew."
+)
+
+
+# ==========================================
+# ABAS
+# ==========================================
+
+aba_mapa, aba_lista, aba_ranking = st.tabs([
+    "🗺️ Mapa",
+    "📋 Lista",
+    "🏆 Ranking"
+])
+
+
+# ==========================================
 # MAPA
-# =========================================================
-with tabs[0]:
+# ==========================================
+
+with aba_mapa:
+    pontos = REGIOES[regiao]
+
+    centro_lat = sum(
+        p[0] for p in pontos
+    ) / len(pontos)
+
+    centro_lon = sum(
+        p[1] for p in pontos
+    ) / len(pontos)
+
     mapa = folium.Map(
-        location=centro_poligono(poligono),
+        location=[centro_lat, centro_lon],
         zoom_start=13,
-        tiles="CartoDB dark_matter"
+        tiles="CartoDB positron"
     )
 
-    desenhar_poligono(mapa, poligono, regiao)
+    # Mostra as seis divisões.
+    for nome, contorno in REGIOES.items():
+        selecionada = nome == regiao
 
+        folium.Polygon(
+            locations=contorno,
+            color=(
+                "#0088CC"
+                if selecionada
+                else "#AAAAAA"
+            ),
+            weight=3 if selecionada else 1,
+            fill=True,
+            fill_opacity=(
+                0.12 if selecionada else 0.02
+            ),
+            tooltip=nome
+        ).add_to(mapa)
+
+    # Mostra os patinetes filtrados.
     for _, bike in df_filtrado.iterrows():
+        bat = bike["Bateria (%)"]
         lat = bike["Latitude"]
         lon = bike["Longitude"]
-        bat = bike["Bateria (%)"]
 
         if bat <= 10:
             cor = "red"
@@ -383,31 +614,41 @@ with tabs[0]:
         else:
             cor = "green"
 
-        if bike["Solto"]:
-            radius = 8
-        else:
-            radius = 6
+        tamanho = 8 if bike["Solto"] else 6
 
-        maps_link = (
-            f"https://www.google.com/maps/search/?api=1&query={lat},{lon}"
+        link = (
+            "https://www.google.com/maps/search/"
+            f"?api=1&query={lat},{lon}"
+        )
+
+        identificador = html.escape(
+            str(bike["Patinete"])
         )
 
         popup = (
-            f"<b>Patinete:</b> {bike['Patinete']}<br>"
+            f"<b>Patinete:</b> {identificador}<br>"
             f"<b>Bateria:</b> {bat:.1f}%<br>"
-            f"<b>Tipo:</b> {'Solto' if bike['Solto'] else 'Estacionado'}<br>"
-            f"<a href='{maps_link}' target='_blank'>Abrir no Maps</a>"
+            f"<b>Tipo:</b> "
+            f"{'Solto' if bike['Solto'] else 'Estacionado'}<br>"
+            f'<a href="{link}" target="_blank">'
+            "Abrir no Maps</a>"
         )
 
         folium.CircleMarker(
             location=[lat, lon],
-            radius=radius,
+            radius=tamanho,
             color=cor,
             fill=True,
             fill_color=cor,
-            fill_opacity=0.85,
-            popup=folium.Popup(popup, max_width=300)
+            fill_opacity=0.9,
+            popup=folium.Popup(
+                popup,
+                max_width=280
+            )
         ).add_to(mapa)
+
+    # Enquadra a região no mapa.
+    folium.FitBounds(pontos).add_to(mapa)
 
     st_folium(
         mapa,
@@ -417,20 +658,29 @@ with tabs[0]:
     )
 
     st.caption(
-        "🔴 0–10% | 🟠 11–20% | 🟢 21–35% | "
-        "Bola maior = patinete solto"
+        "🔴 0–10% | 🟠 11–20% | "
+        "🟢 21–35% | Marcador maior = solto"
     )
 
-# =========================================================
-# LISTA
-# =========================================================
-with tabs[1]:
+
+# ==========================================
+# LISTA DE PATINETES
+# ==========================================
+
+with aba_lista:
     if df_filtrado.empty:
-        st.info("Nenhum patinete encontrado nesse filtro.")
+        st.info(
+            "Nenhum patinete encontrado "
+            "com esse limite de bateria."
+        )
     else:
-        tabela = df_filtrado[
-            ["Patinete", "Bateria (%)", "Solto", "Latitude", "Longitude"]
-        ].copy()
+        tabela = df_filtrado[[
+            "Patinete",
+            "Bateria (%)",
+            "Solto",
+            "Latitude",
+            "Longitude"
+        ]].copy()
 
         st.dataframe(
             tabela,
@@ -439,50 +689,64 @@ with tabs[1]:
         )
 
         st.download_button(
-            "⬇️ Baixar CSV",
-            tabela.to_csv(index=False).encode("utf-8-sig"),
-            file_name="jet_baterias_regiao.csv",
+            "⬇️ Exportar CSV",
+            tabela.to_csv(
+                index=False
+            ).encode("utf-8-sig"),
+            file_name="jet_baterias.csv",
             mime="text/csv"
         )
 
-# =========================================================
-# RANKING
-# =========================================================
-with tabs[2]:
-    ranking = []
 
-    for nome, poly in REGIOES.items():
-        temp = df[
-            df.apply(
-                lambda row: ponto_no_poligono(
-                    row["Latitude"],
-                    row["Longitude"],
-                    poly
-                ),
-                axis=1
-            )
-        ].copy()
+# ==========================================
+# RANKING POR REGIÃO
+# ==========================================
 
-        temp = temp[temp["Bateria (%)"] <= limite]
+with aba_ranking:
+    filtrados = df[
+        (df["Bateria (%)"] <= limite)
+        & df["Região"].notna()
+    ].copy()
 
-        ranking.append({
-            "Região": nome,
-            "Quantidade": len(temp),
-            "Soltos": int(temp["Solto"].sum())
-        })
+    ranking = (
+        filtrados.groupby("Região")
+        .agg(
+            Quantidade=("Patinete", "size"),
+            Soltos=("Solto", "sum")
+        )
+        .reset_index()
+    )
 
-    ranking_df = pd.DataFrame(ranking).sort_values(
+    ranking = pd.DataFrame({
+        "Região": list(REGIOES.keys())
+    }).merge(
+        ranking,
+        on="Região",
+        how="left"
+    )
+
+    ranking = ranking.fillna({
+        "Quantidade": 0,
+        "Soltos": 0
+    })
+
+    ranking[["Quantidade", "Soltos"]] = (
+        ranking[["Quantidade", "Soltos"]]
+        .astype(int)
+    )
+
+    ranking = ranking.sort_values(
         "Quantidade",
         ascending=False
     )
 
     st.dataframe(
-        ranking_df,
+        ranking,
         hide_index=True,
         use_container_width=True
     )
 
     st.caption(
-        "Como agora cada região tem polígono próprio, a separação ficou "
-        "muito melhor que no modelo com círculos."
+        "Cada patinete é associado a uma única "
+        "região para evitar contagem duplicada."
     )
