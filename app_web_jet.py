@@ -503,6 +503,49 @@ if not incluir_soltos:
 if excluir_indisponiveis:
     df = df[~df["Indisponivel"]].copy()
 
+
+# DIAGNÓSTICO DO SUDOESTE
+st.subheader("🔍 Diagnóstico da contagem")
+
+if regiao == "Sudoeste":
+    teste = df.copy()
+
+    teste["Dentro do Sudoeste"] = teste.apply(
+        lambda r: ponto_no_poligono(
+            r["Latitude"],
+            r["Longitude"],
+            REGIOES["Sudoeste"]
+        ),
+        axis=1
+    )
+
+    teste = teste[
+        teste["Bateria (%)"] <= 20
+    ].copy()
+
+    st.write(
+        "Patinetes até 20% recebidos na cidade:",
+        len(teste)
+    )
+
+    st.write(
+        "Dentro do Sudoeste:",
+        int(teste["Dentro do Sudoeste"].sum())
+    )
+
+    st.dataframe(
+        teste[[
+            "Patinete",
+            "Bateria (%)",
+            "Dentro do Sudoeste",
+            "Latitude",
+            "Longitude"
+        ]],
+        hide_index=True,
+        use_container_width=True
+    )
+
+
 df_regiao = df[
     df.apply(
         lambda row: ponto_no_poligono(
