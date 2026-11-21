@@ -503,13 +503,15 @@ if not incluir_soltos:
 if excluir_indisponiveis:
     df = df[~df["Indisponivel"]].copy()
 
-df["Região"] = df.apply(
-    identificar_regiao,
-    axis=1
-)
-
 df_regiao = df[
-    df["Região"] == regiao
+    df.apply(
+        lambda row: ponto_no_poligono(
+            row["Latitude"],
+            row["Longitude"],
+            REGIOES[regiao]
+        ),
+        axis=1
+    )
 ].copy()
 
 df_filtrado = df_regiao[
